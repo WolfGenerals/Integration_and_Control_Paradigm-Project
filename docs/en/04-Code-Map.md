@@ -30,14 +30,16 @@
 
 | File | Purpose |
 |------|---------|
-| `.../client/ClientMountHandler.java` | Client-side mount state management |
+| `.../client/ClientMountHandler.java` | Client-side mount state management + scanOrientation() + orientation cache + smartMappingActive cache |
 | `.../client/ClientEvents.java` | Key input, raycast, fire control, player hiding |
 | `.../client/WeaponOverlay.java` | Crosshair rendering, raycast system (aim + damage) |
 | `.../client/VehicleDebugOverlay.java` | In-game F3-style debug HUD |
 | `.../client/renderer/BulletTrailRenderer.java` | White line fire trail rendering |
 | `.../client/renderer/AxisLineRenderer.java` | Turret axis debug rendering |
-| `.../client/screen/VehicleKeyConfigScreen.java` | Keybinding config GUI |
+| `.../client/screen/VehicleKeyConfigScreen.java` | Keybinding config GUI + smart key display column |
 | `.../client/screen/GrindstoneConfigScreen.java` | Grindstone orientation & anchor config GUI |
+| `.../client/screen/VehicleOrientationScreen.java` | WASD Smart Mapping GUI: FACING stats + Car Mode/Reverse/Toggle |
+| `.../client/VehicleOrientationData.java` | Record counting suspension HORIZONTAL_FACING distribution |
 | `.../mixin/CameraMixin.java` | Orbital camera override |
 
 ## Blocks & Block Entities
@@ -46,9 +48,9 @@
 |------|---------|
 | `.../content/blocks/seat/SeatBlock.java` | Original vehicle core (legacy) |
 | `.../content/blocks/cockpit/CockpitBlock.java` | Cockpit dual-block structure |
-| `.../content/blocks/cockpit/CockpitBlockEntity.java` | Cockpit tick logic |
+| `.../content/blocks/cockpit/CockpitBlockEntity.java` | Cockpit tick logic + smartMappingActive NBT persistence |
 | `.../content/blocks/suspension_test/SuspensionTestBlock.java` | Suspension + wheel test block |
-| `.../content/blocks/suspension_test/SuspensionTestBlockEntity.java` | Suspension physics tick |
+| `.../content/blocks/suspension_test/SuspensionTestBlockEntity.java` | Suspension physics tick + smartKey* fields + getActiveKey*() fallback |
 | `.../content/blocks/turret/TurretBaseBlock.java` | Turret base (KineticBlock + ICogWheel) |
 | `.../content/blocks/turret/TurretBaseBlockEntity.java` | Turret yaw servo, pitch servo |
 | `.../content/blocks/turret/TurretAimController.java` | Auto-aim logic (server-side) |

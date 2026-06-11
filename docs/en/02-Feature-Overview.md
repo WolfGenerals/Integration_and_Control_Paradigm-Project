@@ -45,7 +45,7 @@
 | 17 | Quadratic Drag | ✅ | DRAG_COEFFICIENT=0.0045, top speed ~120 km/h |
 | 18 | MIN_IMPULSE Rationalization | ✅ | 500→30, friction budget from 45g to 2.75g |
 | 19 | Rolling Resistance Cleanup | ✅ | Removed `/0.4` backward-compat relic |
-| 20 | WASD Smart Mapping | 🔄 | Multi-wheel coordinated input abstraction (in progress) |
+| 20 | WASD Smart Mapping | ✅ | Multi-wheel coordinated input abstraction — FACING-voting forward axis, centroid-based steering assignment, Car Mode/Reverse/Toggle |
 
 ## 3. Powertrain
 
@@ -97,12 +97,26 @@
 | 54 | Network System | ✅ | CustomPacketPayload C→S / S→C |
 | 55 | Debug Gear Block | ✅ | Small gear, N key toggles RPM printout |
 
-## 6. Infrastructure
+## 6. Smart Mapping System
 
 | # | Feature | Status | Description |
 |---|---------|--------|-------------|
-| 56 | SubLevel Chunk Scan | ✅ | Using `plot.getLoadedChunks()` for internal block access |
-| 57 | Build Dependency Extraction | ✅ | Auto-extract nested JARs from Create/Simulated |
+| 56 | VehicleOrientationData | ✅ | Record counting suspension HORIZONTAL_FACING (N/S/E/W), infers width axis vs forward axis |
+| 57 | Orientation Scan & Cache | ✅ | ClientMountHandler.scanOrientation() — chunk-scan all suspension blocks, cache by SubLevel UUID |
+| 58 | VehicleOrientationScreen | ✅ | Interactive C-key GUI showing FACING stats + Car Mode / Reverse / Toggle buttons |
+| 59 | SmartMapC2SPacket | ✅ | C→S packet with Action enum (CAR_MODE, REVERSE, TOGGLE_SMART) |
+| 60 | Car Mode Server Logic | ✅ | FACING voting → width axis → centroid Z → per-wheel smart key assignment (steering mirrored across centroid) |
+| 61 | Reverse Direction | ✅ | W↔S, A↔D swap on all smart keys |
+| 62 | Toggle Smart Mapping | ✅ | Enable re-runs Car Mode, disable clears all smart keys, persists via CockpitBlockEntity NBT |
+| 63 | Smart Key Storage | ✅ | smartKey* fields in SuspensionTestBlockEntity, getActiveKey*() fallback (smart→manual) |
+| 64 | Smart Key Config Display | ✅ | Right column in VehicleKeyConfigScreen showing green-highlighted smart keys |
+
+## 7. Infrastructure
+
+| # | Feature | Status | Description |
+|---|---------|--------|-------------|
+| 65 | SubLevel Chunk Scan | ✅ | Using `plot.getLoadedChunks()` for internal block access |
+| 66 | Build Dependency Extraction | ✅ | Auto-extract nested JARs from Create/Simulated |
 
 ## Design Philosophy
 
