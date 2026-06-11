@@ -1,0 +1,994 @@
+package com.hainabaichuan75.iac_p.content.blocks.turret;
+
+import com.hainabaichuan75.iac_p.IACP;
+import com.hainabaichuan75.iac_p.index.ModBlockEntityTypes;
+import com.simibubi.create.content.kinetics.base.KineticBlockEntity;
+import com.simibubi.create.foundation.blockEntity.behaviour.BlockEntityBehaviour;
+import net.createmod.catnip.math.AngleHelper;
+import dev.ryanhcode.sable.Sable;
+import dev.ryanhcode.sable.api.physics.PhysicsPipeline;
+import dev.ryanhcode.sable.api.physics.constraint.ConstraintJointAxis;
+import dev.ryanhcode.sable.api.physics.constraint.PhysicsConstraintHandle;
+import dev.ryanhcode.sable.api.physics.constraint.free.FreeConstraintConfiguration;
+import dev.ryanhcode.sable.api.physics.constraint.generic.GenericConstraintConfiguration;
+import dev.ryanhcode.sable.api.physics.constraint.rotary.RotaryConstraintConfiguration;
+import dev.ryanhcode.sable.api.sublevel.ServerSubLevelContainer;
+import dev.ryanhcode.sable.api.sublevel.SubLevelContainer;
+import dev.ryanhcode.sable.companion.math.Pose3d;
+import dev.ryanhcode.sable.sublevel.ServerSubLevel;
+import dev.ryanhcode.sable.sublevel.SubLevel;
+import dev.ryanhcode.sable.sublevel.plot.LevelPlot;
+import dev.ryanhcode.sable.sublevel.storage.SubLevelRemovalReason;
+import dev.ryanhcode.sable.sublevel.system.SubLevelPhysicsSystem;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.core.HolderLookup;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.Level;
+import net.neoforged.neoforge.network.PacketDistributor;
+
+import com.hainabaichuan75.iac_p.network.packets.AnchorDataS2CPacket;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.entity.BlockEntityType;
+import net.minecraft.world.level.block.state.BlockState;
+import org.jetbrains.annotations.Nullable;
+import org.joml.Quaterniond;
+import org.joml.Vector3d;
+
+import java.util.EnumSet;
+import java.util.List;
+import java.util.UUID;
+
+/**
+ * TurretBaseBlockEntity —— 炮塔底座 BE。
+ * <p>
+ * 右键后，在底座附近的主世界坐标生成一个原版砂轮的物理化 SubLevel。
+ * 再右键一次即可拆卸（移除该 SubLevel）。
+ * 这是最简单的"一步到位"方案，后续可扩展更多功能。
+ */
+public class TurretBaseBlockEntity extends KineticBlockEntity {
+
+    // ==================================================================
+    //  静态注册表：砂轮 SubLevel UUID → 炮塔底座位置（供网络包查找）
+    // ==================================================================
+
+    private static final java.util.Map<java.util.UUID, BlockPos> GRINDSTONE_OWNER_MAP = new java.util.HashMap<>();
+    private static final java.util.Map<java.util.UUID, BlockPos> ROD_OWNER_MAP = new java.util.HashMap<>();
+
+    /**
+     * 客户端锚点缓存：砂轮 SubLevel UUID → [anchorX, anchorY, anchorZ]
+     * 在 read() 收到客户端同步数据时更新，供配置界面使用
+     */
+    private static final java.util.Map<java.util.UUID, double[]> GRINDSTONE_ANCHOR_MAP = new java.util.HashMap<>();
+
+    /**
+     * 客户端线条渲染缓存：SubLevel UUID → [ox,oy,oz, xx,xy,xz, yx,yy,yz, zx,zy,zz]
+     * 世界坐标，由服务端在 write() 中计算，供 AxisLineRenderer 直接使用
+     */
+    private static final java.util.Map<java.util.UUID, double[]> GRINDSTONE_LINE_CACHE = new java.util.HashMap<>();
+
+    /**
+     * 客户端静态缓存：包含地毯的 SubLevel UUID → 该 SubLevel 上所有地毯的局部 BlockPos 列表
+     * 支持同一个物理结构上放置多个炮塔地毯，每个地毯独立渲染三色焦点标记
+     * 在 read() 客户端同步时通过 Sable.HELPER.getContaining(this) 获取
+     */
+    private static final java.util.Map<java.util.UUID, java.util.List<BlockPos>> CARPET_LOCAL_POS_MAP = new java.util.HashMap<>();
+
+    /** 获取地毯位置缓存（客户端） */
+    public static java.util.Map<java.util.UUID, java.util.List<BlockPos>> getCarpetLocalPosMap() {
+        return CARPET_LOCAL_POS_MAP;
+    }
+
+    /** 获取客户端的锚点数据（供配置界面使用） */
+    public static java.util.Map<java.util.UUID, double[]> getAnchorMap() {
+        return GRINDSTONE_ANCHOR_MAP;
+    }
+
+    /** 获取客户端的线条缓存（供渲染器使用） */
+    public static java.util.Map<java.util.UUID, double[]> getLineCache() {
+        return GRINDSTONE_LINE_CACHE;
+    }
+
+    /** 根据砂轮 SubLevel UUID 查找拥有它的底座位置 */
+    @Nullable
+    public static BlockPos findOwnerByGrindstoneUUID(UUID uuid) {
+        return GRINDSTONE_OWNER_MAP.get(uuid);
+    }
+
+    /** 根据避雷针 SubLevel UUID 查找拥有它的底座位置 */
+    @Nullable
+    public static BlockPos findOwnerByRodUUID(UUID uuid) {
+        return ROD_OWNER_MAP.get(uuid);
+    }
+
+    // ==================================================================
+    //  运行时状态
+    // ==================================================================
+
+    /** 是否已装配 */
+    private boolean assembled = false;
+
+    /** 砂轮 SubLevel 的 UUID */
+    @Nullable
+    private UUID grindstoneSubLevelId;
+
+    /** 避雷针 SubLevel 的 UUID */
+    @Nullable
+    private UUID lightningRodSubLevelId;
+
+    /** 炮管(避雷针)↔砂轮 俯仰约束句柄（RotaryConstraint，局部 X 轴旋转 = 高低机） */
+    @Nullable
+    private PhysicsConstraintHandle barrelPitchHandle;
+
+    /** 车体 SubLevel 的 UUID（用于瞄准时获取车体姿态，null = 放在主世界） */
+    @Nullable
+    private UUID vehicleSubLevelId;
+
+    /** (已移除) 避雷针↔载具 不再直接约束——物理引擎通过约束链自行处理 */
+    /** 避雷针↔载具 FreeConstraint：仅用于禁用碰撞（防止俯仰时被车体卡住） */
+    @Nullable
+    private PhysicsConstraintHandle rodVehicleFreeHandle;
+    /** 砂轮↔载具 旋转轴承约束句柄（RotaryConstraint = 铰链，保留一个旋转自由度） */
+    @Nullable
+    private PhysicsConstraintHandle swivelBearingHandle;
+
+    /** 锚点 A 在砂轮 SubLevel 局部空间中的坐标（默认零点 = 砂轮方块中心） */
+    private double anchorX = 0.0;
+    private double anchorY = 0.0;
+    private double anchorZ = 0.0;
+
+    // ====== 约束锚点偏移常量（可在此调整炮塔铰链位置） ======
+    private static final double ANCHOR_ROD_X = 0.0;       // 避雷针端 X（炮管约束点）
+    private static final double ANCHOR_ROD_Y = 0.0;       // 避雷针端 Y（0=中心）
+    private static final double ANCHOR_ROD_Z = -0.5;      // 避雷针端 Z（你在配置节调好的 −0.5）
+    private static final double ANCHOR_GS_ROD_X = 0.0;    // 砂轮端(避雷针侧) X
+    private static final double ANCHOR_GS_ROD_Y = 0.1;    // 砂轮端(避雷针侧) Y（你在配置节调好的 +0.1）
+    private static final double ANCHOR_GS_ROD_Z = 0.0;    // 砂轮端(避雷针侧) Z
+    private static final double ANCHOR_GS_SWIVEL_X = 0.0; // 砂轮端(方向机) X
+    private static final double ANCHOR_GS_SWIVEL_Y = 0.0; // 砂轮端(方向机) Y
+    private static final double ANCHOR_GS_SWIVEL_Z = 0.0; // 砂轮端(方向机) Z
+    private static final double ANCHOR_VEHICLE_X = 0.0;   // 载具(地毯)端 X
+    private static final double ANCHOR_VEHICLE_Y = 0.0;   // 载具(地毯)端 Y
+    private static final double ANCHOR_VEHICLE_Z = 0.0;   // 载具(地毯)端 Z
+
+    // ==================================================================
+    //  齿轮驱动：位置模式 PD 伺服
+    //  参考 SwivelBearingBlockEntity.updateServoCoefficients()
+    //  每 tick 用 position-mode setMotor 保持/驱动目标角度
+    //  目标角度由 TurretAimController 按比例增量调节
+    // ==================================================================
+
+    /** 当前目标偏航角度（度），由 AimController 增量调节 */
+    private double targetAngleDegrees = 0;
+
+    /** 上一 tick 的目标角度（度），用于 partialTick 插值 */
+    private double lastTargetAngleDegrees = 0;
+
+    /** PD 伺服刚度（P 增益）*/
+    private static final double SERVO_STIFFNESS = 200.0;
+
+    /** PD 伺服阻尼（D 增益）*/
+    private static final double SERVO_DAMPING = 16.0;
+
+    // ====== 高低机（Pitch）位置模式 PD 伺服 ======
+
+    /** 当前目标俯仰角度（度），正直向上 */
+    private double targetPitchAngleDegrees = 0;
+
+    /** 上一 tick 的目标俯仰角度（度） */
+    private double lastTargetPitchAngleDegrees = 0;
+
+    /** 俯仰 PD 刚度（×6 以对抗悬臂重力矩，减少稳态下垂） */
+    private static final double PITCH_SERVO_STIFFNESS = 6000.0;
+
+    /** 俯仰 PD 阻尼（同比例增大 + 提升阻尼比保证稳定性） */
+    private static final double PITCH_SERVO_DAMPING = 400.0;
+
+    // ==================================================================
+
+    public TurretBaseBlockEntity(BlockPos pos, BlockState state) {
+        super(ModBlockEntityTypes.TURRET_BASE.get(), pos, state);
+    }
+
+    @Override
+    public void addBehaviours(List<BlockEntityBehaviour> behaviours) {
+        // 目前无特殊行为
+    }
+
+    // ==================================================================
+    //  KineticBlockEntity 重写：位置模式 PD 伺服
+    //  参考 SwivelBearingBlockEntity — 每 tick position-mode setMotor
+    // ==================================================================
+
+    @Override
+    public void tick() {
+        super.tick(); // KineticBlockEntity.tick() → SmartBlockEntity.tick()
+
+        if (level == null || level.isClientSide) return;
+
+        // 每 tick 更新方向机 PD 伺服（即使无目标也保持位置）
+        if (assembled && swivelBearingHandle != null && swivelBearingHandle.isValid()) {
+            updateYawServo();
+        }
+
+        // 每 tick 更新高低机 PD 伺服（位置模式，与方向机一致）
+        if (assembled && barrelPitchHandle != null && barrelPitchHandle.isValid()) {
+            updatePitchServo();
+        }
+    }
+
+    @Override
+    public void onSpeedChanged(float previousSpeed) {
+        super.onSpeedChanged(previousSpeed);
+    }
+
+    // 零应力消耗（纯被动旋转件，同 SwivelBearing）
+    @Override
+    public float calculateStressApplied() {
+        return 0;
+    }
+
+    /**
+     * 方向机位置模式 PD 伺服。
+     * <p>
+     * 每 tick 调用 setMotor(position mode)，与 SwivelBearing 完全相同的模式。
+     * 无目标时保持当前角度（targetAngleDegrees 不变 → 位置保持）。
+     * 有目标时由 AimController 增量调节 targetAngleDegrees → 平滑转动。
+     */
+    private void updateYawServo() {
+        if (!assembled || swivelBearingHandle == null || !swivelBearingHandle.isValid()) return;
+
+        // 用 angleLerp 做 partialTick 插值（与 SwivelBearing 一致）
+        float goal = net.createmod.catnip.math.AngleHelper.rad(
+                net.createmod.catnip.math.AngleHelper.angleLerp(1.0f,
+                        (float) lastTargetAngleDegrees, (float) targetAngleDegrees));
+
+        swivelBearingHandle.setMotor(
+                dev.ryanhcode.sable.api.physics.constraint.rotary.RotaryConstraintHandle.DEFAULT_AXIS,
+                goal,           // 目标角度（弧度）
+                SERVO_STIFFNESS, // kP — 位置刚度
+                SERVO_DAMPING,   // kD — 速度阻尼
+                false,           // position mode
+                0.0
+        );
+        swivelBearingHandle.setContactsEnabled(false);
+
+        // 推进 lastTarget 用于下一 tick 插值
+        this.lastTargetAngleDegrees = this.targetAngleDegrees;
+    }
+
+    /**
+     * 设置绝对目标偏航角度（度），由 AimController 每 tick 覆写。
+     * <p>
+     * 直接设为从当前姿态 + 误差算出的目标角度，不累积。
+     * 不归一化到 [0,360) —— 保持连续性，避免跨 0° 时走远路。
+     */
+    public void setTargetYawAbsolute(double degrees) {
+        this.lastTargetAngleDegrees = this.targetAngleDegrees;
+        this.targetAngleDegrees = degrees;
+    }
+
+    /**
+     * 获取当前目标偏航角度，供 AimController 读取。
+     */
+    public double getTargetYawAngle() {
+        return this.targetAngleDegrees;
+    }
+
+    // ==================================================================
+    //  高低机（Pitch）位置模式 PD 伺服
+    // ==================================================================
+
+    /**
+     * 高低机位置模式 PD 伺服。
+     * <p>
+     * 每 tick 调用 setMotor(position mode)，与方向机完全相同的模式。
+     * 无目标时保持当前俯仰角度（targetPitchAngleDegrees 不变 → 位置保持）。
+     */
+    private void updatePitchServo() {
+        if (!assembled || barrelPitchHandle == null || !barrelPitchHandle.isValid()) return;
+
+        float goal = AngleHelper.rad(
+                AngleHelper.angleLerp(1.0f,
+                        (float) lastTargetPitchAngleDegrees, (float) targetPitchAngleDegrees));
+
+        barrelPitchHandle.setMotor(
+                ConstraintJointAxis.ANGULAR_X,
+                goal,
+                PITCH_SERVO_STIFFNESS,
+                PITCH_SERVO_DAMPING,
+                false,  // position mode
+                0.0
+        );
+        barrelPitchHandle.setContactsEnabled(false);
+
+        this.lastTargetPitchAngleDegrees = this.targetPitchAngleDegrees;
+    }
+
+    /**
+     * 设置绝对目标俯仰角度（度），由 AimController 每 tick 覆写。
+     * <p>
+     * 正值 = 炮管上仰，负值 = 炮管下俯。
+     */
+    public void setTargetPitchAbsolute(double degrees) {
+        this.lastTargetPitchAngleDegrees = this.targetPitchAngleDegrees;
+        this.targetPitchAngleDegrees = degrees;
+    }
+
+    /**
+     * 获取当前目标俯仰角度（度），供 AimController 读取。
+     */
+    public double getTargetPitchAngle() {
+        return this.targetPitchAngleDegrees;
+    }
+
+    // ==================================================================
+    //  装配 / 拆卸
+    // ==================================================================
+
+    /**
+     * 装配：在底座附近找一个空位，生成一个包含原版砂轮的物理化 SubLevel。
+     */
+    public void assemble() {
+        if (this.assembled) {
+            IACP.LOGGER.info("[TurretBase] assemble() 跳过：已装配 @ {}", this.worldPosition);
+            return;
+        }
+        if (this.level == null || this.level.isClientSide) {
+            return;
+        }
+        IACP.LOGGER.info("[TurretBase] ====== 开始装配 @ {} ======", this.worldPosition);
+
+        ServerLevel serverLevel = (ServerLevel) this.level;
+        ServerSubLevelContainer container = (ServerSubLevelContainer) SubLevelContainer.getContainer(serverLevel);
+        if (container == null) { IACP.LOGGER.error("[TurretBase] SubLevelContainer 为空！"); return; }
+        SubLevelPhysicsSystem physicsSystem = container.physicsSystem();
+        if (physicsSystem == null) { IACP.LOGGER.error("[TurretBase] physicsSystem 为空！"); return; }
+        PhysicsPipeline pipeline = physicsSystem.getPipeline();
+        if (pipeline == null) { IACP.LOGGER.error("[TurretBase] pipeline 为空！"); return; }
+
+        // 判断地毯是否在物理结构（SubLevel）上
+        SubLevel containingSubLevel = Sable.HELPER.getContaining(this);
+        BlockPos searchOrigin;
+
+        if (containingSubLevel != null) {
+            // 在物理结构上：将 SubLevel 局部坐标转换到主世界网格坐标
+            Vector3d localCenter = new Vector3d(
+                    this.worldPosition.getX() + 0.5,
+                    this.worldPosition.getY() + 0.5,
+                    this.worldPosition.getZ() + 0.5
+            );
+            containingSubLevel.logicalPose().transformPosition(localCenter);
+            searchOrigin = BlockPos.containing(
+                    Math.floor(localCenter.x),
+                    Math.floor(localCenter.y),
+                    Math.floor(localCenter.z)
+            );
+            // 缓存车体 SubLevel UUID，供 AimController 做局部坐标系稳定瞄准
+            this.vehicleSubLevelId = containingSubLevel.getUniqueId();
+            IACP.LOGGER.info("[TurretBase] 地毯在 SubLevel 上，主世界网格坐标 = {}，车体 UUID={}",
+                    searchOrigin, this.vehicleSubLevelId);
+        } else {
+            // 在主世界：使用地毯本身的坐标
+            searchOrigin = this.worldPosition;
+            IACP.LOGGER.info("[TurretBase] 地毯在主世界，坐标 = {}", searchOrigin);
+        }
+
+        // ================================================================
+        //  找两个不重合的空位：砂轮位置 + 避雷针位置（水平偏移 1 格）
+        // ================================================================
+        BlockPos spotA = findEmptySpot(serverLevel, searchOrigin);
+        if (spotA == null) {
+            IACP.LOGGER.error("[TurretBase] 找不到第一个空位（砂轮）！");
+            return;
+        }
+        IACP.LOGGER.info("[TurretBase] 砂轮目标位置 = {}", spotA);
+
+        // 炮管（避雷针）不再需要独立空位——将与砂轮在同一位置叠加，
+        // 通过 RotaryConstraint（X 轴俯仰）绑定到砂轮上，形成炮塔总成
+
+        Quaterniond identity = new Quaterniond();
+
+        // ================================================================
+        //  计算砂轮生成位置与姿态
+        //  - 在载具上：定位点（anchor 对齐地毯）+ 载具姿态
+        //  - 在主世界：空位 + 无旋转（原有逻辑）
+        //  这样砂轮生成时就在正确位置，省去二次 teleport
+        // ================================================================
+        Quaterniond grindstoneOrient = new Quaterniond();
+        Vector3d grindstoneSpawnVec;
+        if (containingSubLevel instanceof ServerSubLevel vehicleSL_pre) {
+            var vPose = vehicleSL_pre.logicalPose();
+            Vector3d carpetWorld = vPose.transformPosition(new Vector3d(
+                    this.worldPosition.getX() + 0.5,
+                    this.worldPosition.getY() + 0.5,
+                    this.worldPosition.getZ() + 0.5
+            ));
+            grindstoneSpawnVec = new Vector3d(
+                    carpetWorld.x - anchorX,
+                    carpetWorld.y - anchorY,
+                    carpetWorld.z - anchorZ
+            );
+            grindstoneOrient.set(vPose.orientation());
+            IACP.LOGGER.info("[TurretBase] 砂轮目标: 定位点+载具姿态 pos=({},{},{})",
+                    grindstoneSpawnVec.x, grindstoneSpawnVec.y, grindstoneSpawnVec.z);
+        } else {
+            grindstoneSpawnVec = new Vector3d(spotA.getX() + 0.5, spotA.getY() + 0.5, spotA.getZ() + 0.5);
+            IACP.LOGGER.info("[TurretBase] 砂轮目标: 空位 pos=({},{},{})",
+                    grindstoneSpawnVec.x, grindstoneSpawnVec.y, grindstoneSpawnVec.z);
+        }
+
+        // ================================================================
+        //  创建砂轮 SubLevel
+        // ================================================================
+        ServerSubLevel grindstoneSL;
+        try {
+            Pose3d pose = new Pose3d();
+            pose.position().set(grindstoneSpawnVec);
+            pose.orientation().set(grindstoneOrient);
+            grindstoneSL = (ServerSubLevel) container.allocateNewSubLevel(pose);
+            initSingleBlockSubLevel(grindstoneSL, Blocks.GRINDSTONE.defaultBlockState()
+                    .setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.ATTACH_FACE,
+                            net.minecraft.world.level.block.state.properties.AttachFace.FLOOR));
+            pipeline.teleport(grindstoneSL, grindstoneSpawnVec, grindstoneOrient);
+            grindstoneSL.updateLastPose();
+        } catch (Exception e) {
+            IACP.LOGGER.error("[TurretBase] 砂轮 SubLevel 创建失败！", e);
+            return;
+        }
+        IACP.LOGGER.info("[TurretBase] 砂轮 SubLevel UUID={}", grindstoneSL.getUniqueId());
+        this.grindstoneSubLevelId = grindstoneSL.getUniqueId();
+        GRINDSTONE_OWNER_MAP.put(grindstoneSL.getUniqueId(), this.worldPosition);
+        GRINDSTONE_ANCHOR_MAP.put(grindstoneSL.getUniqueId(), new double[]{anchorX, anchorY, anchorZ});
+        sendAnchorDataToClients();
+
+        // ================================================================
+        //  建立旋转轴承（RotaryConstraint）：将砂轮锚定到载具上
+        //  ⚠ 关键：pos1/pos2 使用 SubLevel 底层（underlying level）的**方块实际坐标**！
+        //    - 砂轮方块在嵌入层 ZERO → 底层实际位置 = plot.getCenterBlock()
+        //    - 地毯方块在载具嵌入层 worldPosition → 底层实际位置 = this.worldPosition
+        //  约束系统将坐标通过各 SubLevel 的 pose 变换到世界空间
+        //  由于砂轮已被 teleport 到定位点，两端的世界坐标相同 → 零力安全
+        //  旋转轴 = 各 SubLevel 局部 Y 轴方向（两个姿态一致所以指向相同）
+        //  同时禁用碰撞（砂轮穿透载具）
+        // ================================================================
+        if (containingSubLevel instanceof ServerSubLevel vehicleSL) {
+            try {
+                // 砂轮方块中心 = getCenterBlock() 的中心 + 硬编码偏移
+                BlockPos gc = grindstoneSL.getPlot().getCenterBlock();
+                Vector3d pos1 = new Vector3d(gc.getX() + 0.5, gc.getY() + 0.5, gc.getZ() + 0.5)
+                        .add(ANCHOR_GS_SWIVEL_X, ANCHOR_GS_SWIVEL_Y, ANCHOR_GS_SWIVEL_Z);
+                // 地毯方块中心 = this.worldPosition 的中心 + 硬编码偏移
+                Vector3d pos2 = new Vector3d(
+                        this.worldPosition.getX() + 0.5,
+                        this.worldPosition.getY() + 0.5,
+                        this.worldPosition.getZ() + 0.5
+                ).add(ANCHOR_VEHICLE_X, ANCHOR_VEHICLE_Y, ANCHOR_VEHICLE_Z);
+                RotaryConstraintConfiguration rotaryConfig = new RotaryConstraintConfiguration(
+                        pos1, pos2,
+                        new Vector3d(0, 1, 0),  // normal1: 砂轮端旋转轴
+                        new Vector3d(0, 1, 0)   // normal2: 载具端旋转轴
+                );
+                this.swivelBearingHandle = pipeline.addConstraint(grindstoneSL, vehicleSL, rotaryConfig);
+                this.swivelBearingHandle.setContactsEnabled(false);  // 禁用碰撞，砂轮穿过载具
+                IACP.LOGGER.info("[TurretBase] 旋转轴承已建立 ✅ 位置=({}, {}, {})",
+                        grindstoneSpawnVec.x, grindstoneSpawnVec.y, grindstoneSpawnVec.z);
+            } catch (Exception e) {
+                IACP.LOGGER.warn("[TurretBase] 创建旋转轴承失败，回退到纯碰撞禁用", e);
+                try {
+                    Vector3d blockCenter = new Vector3d(0.5, 0.5, 0.5);
+                    FreeConstraintConfiguration freeConfig = new FreeConstraintConfiguration(
+                            blockCenter, blockCenter, new Quaterniond());
+                    this.swivelBearingHandle = pipeline.addConstraint(grindstoneSL, vehicleSL, freeConfig);
+                    this.swivelBearingHandle.setContactsEnabled(false);
+                    IACP.LOGGER.info("[TurretBase] 回退: 砂轮↔载具 碰撞已禁用");
+                } catch (Exception e2) {
+                    IACP.LOGGER.error("[TurretBase] 回退也失败", e2);
+                }
+            }
+        }
+
+        // ================================================================
+        //  创建炮管（避雷针）SubLevel
+        //  ⚠ 完全遵循与砂轮完全相同的模式：
+        //    1. 同样的生成位置（grindstoneSpawnVec）+ 同样的姿态（grindstoneOrient）
+        //    2. 同样的 initSingleBlockSubLevel + teleport + updateLastPose 流程
+        //    3. 约束坐标用 plot.getCenterBlock() + 0.5（砂轮↔载具已验证可行）
+        //    4. 物理引擎通过约束链自行处理：载具─Rotary─砂轮─Generic─避雷针
+        //  方向机（Y 轴旋转）= 砂轮↔载具 RotaryConstraint
+        //  高低机（X 轴俯仰）= 由 TurretAimController 通过速度控制驱动（约束全锁定）
+        //  默认全锁定 = 参考 swivel_bearing 锁定状态，无目标时保持当前位置
+        // ================================================================
+        {
+            try {
+                // ⚠ 和砂轮完全相同的生成位置和姿态——两者重叠没问题，
+                //   setContactsEnabled(false) 让双方碰撞体互相穿透
+                Pose3d poseB = new Pose3d();
+                poseB.position().set(grindstoneSpawnVec);
+                poseB.orientation().set(grindstoneOrient);
+                ServerSubLevel rodSL = (ServerSubLevel) container.allocateNewSubLevel(poseB);
+                initSingleBlockSubLevel(rodSL, Blocks.LIGHTNING_ROD.defaultBlockState()
+                        .setValue(net.minecraft.world.level.block.LightningRodBlock.FACING, Direction.SOUTH));
+                pipeline.teleport(rodSL, grindstoneSpawnVec, grindstoneOrient);
+                rodSL.updateLastPose();
+                this.lightningRodSubLevelId = rodSL.getUniqueId();
+                ROD_OWNER_MAP.put(rodSL.getUniqueId(), this.worldPosition);
+                IACP.LOGGER.info("[TurretBase] 炮管(避雷针) SubLevel UUID={}", rodSL.getUniqueId());
+
+                // ============================================================
+                //  与砂轮完全相同的约束坐标模式：getCenterBlock() + 0.5
+                //  GenericConstraint 全轴锁定 = 刚性连接
+                //  默认锁定（参考 swivel_bearing），由 TurretAimController 速度控制驱动
+                // ============================================================
+                try {
+                    BlockPos rc = rodSL.getPlot().getCenterBlock();
+                    Vector3d pos1 = new Vector3d(rc.getX() + 0.5, rc.getY() + 0.5, rc.getZ() + 0.5)
+                            .add(ANCHOR_ROD_X, ANCHOR_ROD_Y, ANCHOR_ROD_Z);
+                    BlockPos gc = grindstoneSL.getPlot().getCenterBlock();
+                    Vector3d pos2 = new Vector3d(gc.getX() + 0.5, gc.getY() + 0.5, gc.getZ() + 0.5)
+                            .add(ANCHOR_GS_ROD_X, ANCHOR_GS_ROD_Y, ANCHOR_GS_ROD_Z);
+                    IACP.LOGGER.info("[TurretBase] 炮管约束坐标: rod=({},{},{}) grindstone=({},{},{})",
+                            pos1.x, pos1.y, pos1.z, pos2.x, pos2.y, pos2.z);
+
+                    // ====================================================
+                    //  GenericConstraint：保留 ANGULAR_X 自由（俯仰轴）
+                    //  锁定：LINEAR_XYZ + ANGULAR_YZ
+                    //  自由：ANGULAR_X（绕局部 X 轴俯仰）
+                    //  默认"锁定"效果由 TurretAimController 的制动实现：
+                    //  无目标时角速度归零 → 保持当前位置；有目标时驱动 ANGULAR_X
+                    // ====================================================
+                    GenericConstraintConfiguration bindConfig = new GenericConstraintConfiguration(
+                            pos1, pos2,
+                            new Quaterniond(), // orientation1
+                            new Quaterniond(), // orientation2
+                            EnumSet.of(
+                                    ConstraintJointAxis.LINEAR_X,
+                                    ConstraintJointAxis.LINEAR_Y,
+                                    ConstraintJointAxis.LINEAR_Z,
+                                    ConstraintJointAxis.ANGULAR_Y,
+                                    ConstraintJointAxis.ANGULAR_Z
+                            ) // ANGULAR_X 未锁定 = 可俯仰
+                    );
+                    this.barrelPitchHandle = pipeline.addConstraint(rodSL, grindstoneSL, bindConfig);
+                    this.barrelPitchHandle.setContactsEnabled(false);
+                    IACP.LOGGER.info("[TurretBase] 炮管↔砂轮 GenericConstraint ✅");
+
+                    // ════════════════════════════════════════════════════════
+                    //  避雷针↔载具 FreeConstraint：仅用于禁用碰撞
+                    //  避雷针俯仰时会穿透载具车体，不加此约束则物理碰撞卡住炮管
+                    //  无任何 DOF（FreeConstraint = 6 自由度自由），仅供碰撞禁用
+                    // ════════════════════════════════════════════════════════
+                    if (containingSubLevel instanceof ServerSubLevel vehicleSL2) {
+                        try {
+                            Vector3d rodCenter = new Vector3d(
+                                    rodSL.getPlot().getCenterBlock().getX() + 0.5,
+                                    rodSL.getPlot().getCenterBlock().getY() + 0.5,
+                                    rodSL.getPlot().getCenterBlock().getZ() + 0.5);
+                            Vector3d vehicleCenter = new Vector3d(
+                                    this.worldPosition.getX() + 0.5,
+                                    this.worldPosition.getY() + 0.5,
+                                    this.worldPosition.getZ() + 0.5);
+                            FreeConstraintConfiguration freeConfig = new FreeConstraintConfiguration(
+                                    rodCenter, vehicleCenter, new Quaterniond());
+                            this.rodVehicleFreeHandle = pipeline.addConstraint(rodSL, vehicleSL2, freeConfig);
+                            this.rodVehicleFreeHandle.setContactsEnabled(false);
+                            IACP.LOGGER.info("[TurretBase] 避雷针↔载具 碰撞已禁用 ✅");
+                        } catch (Exception e2) {
+                            IACP.LOGGER.warn("[TurretBase] 避雷针↔载具碰撞禁用失败", e2);
+                        }
+                    }
+                } catch (Exception e) {
+                    IACP.LOGGER.warn("[TurretBase] 炮管绑定失败", e);
+                }
+            } catch (Exception e) {
+                IACP.LOGGER.error("[TurretBase] 炮管(避雷针) SubLevel 创建失败！仅保留砂轮", e);
+                this.lightningRodSubLevelId = null;
+            }
+        }
+
+        this.assembled = true;
+        this.setChanged();
+        this.sendData();
+        IACP.LOGGER.info("[TurretBase] ====== 装配完成（砂轮 + 炮管(避雷针)）@ {} ======", this.worldPosition);
+    }
+
+    /**
+     * 拆卸：移除所有 SubLevel（砂轮 + 避雷针）。
+     */
+    public void disassemble() {
+        if (!this.assembled || this.level == null || this.level.isClientSide) {
+            return;
+        }
+        IACP.LOGGER.info("[TurretBase] ====== 开始拆卸 @ {} ======", this.worldPosition);
+
+        try {
+            ServerLevel serverLevel = (ServerLevel) this.level;
+            ServerSubLevelContainer container = (ServerSubLevelContainer) SubLevelContainer.getContainer(serverLevel);
+            if (container == null) return;
+
+            // 先移除所有约束（必须在移除 SubLevel 之前）
+            removeConstraint(this.barrelPitchHandle);
+            this.barrelPitchHandle = null;
+            removeConstraint(this.rodVehicleFreeHandle);
+            this.rodVehicleFreeHandle = null;
+            removeConstraint(this.swivelBearingHandle);
+            this.swivelBearingHandle = null;
+
+            // 移除砂轮
+            // 从静态注册表中移除
+            if (this.grindstoneSubLevelId != null) {
+                GRINDSTONE_OWNER_MAP.remove(this.grindstoneSubLevelId);
+                GRINDSTONE_ANCHOR_MAP.remove(this.grindstoneSubLevelId);
+                GRINDSTONE_LINE_CACHE.remove(this.grindstoneSubLevelId);
+            }
+            removeSubLevelById(container, this.grindstoneSubLevelId);
+            this.grindstoneSubLevelId = null;
+
+            // 移除避雷针
+            if (this.lightningRodSubLevelId != null) {
+                ROD_OWNER_MAP.remove(this.lightningRodSubLevelId);
+            }
+            removeSubLevelById(container, this.lightningRodSubLevelId);
+            this.lightningRodSubLevelId = null;
+        } catch (Exception e) {
+            IACP.LOGGER.error("[TurretBase] 拆卸过程中发生异常", e);
+            this.grindstoneSubLevelId = null;
+            this.lightningRodSubLevelId = null;
+            this.barrelPitchHandle = null;
+        }
+
+        this.vehicleSubLevelId = null;
+
+        this.assembled = false;
+        this.setChanged();
+        this.sendData();
+        IACP.LOGGER.info("[TurretBase] ====== 拆卸完成 @ {} ======", this.worldPosition);
+    }
+
+    // ==================================================================
+    //  公共接口（供网络包调用）
+    // ==================================================================
+
+    /** 返回砂轮 SubLevel 的 UUID */
+    @Nullable
+    public UUID getGrindstoneSubLevelId() {
+        return this.grindstoneSubLevelId;
+    }
+
+    /** 返回车体 SubLevel 的 UUID（用于瞄准局部坐标系稳定），null = 放在主世界 */
+    @Nullable
+    public UUID getVehicleSubLevelId() {
+        return this.vehicleSubLevelId;
+    }
+
+    /** 返回方向机旋转轴承句柄（砂轮↔载具 RotaryConstraint），供 TurretAimController 驱动 Y 轴旋转 */
+    @Nullable
+    public PhysicsConstraintHandle getSwivelBearingHandle() {
+        return this.swivelBearingHandle;
+    }
+
+    /** 返回高低机俯仰约束句柄（避雷针↔砂轮 GenericConstraint），供 TurretAimController 驱动 X 轴俯仰 */
+    @Nullable
+    public PhysicsConstraintHandle getBarrelPitchHandle() {
+        return this.barrelPitchHandle;
+    }
+
+    /** 获取锚点坐标（副本） */
+    public double[] getAnchor() {
+        return new double[]{this.anchorX, this.anchorY, this.anchorZ};
+    }
+
+    /** 设置锚点坐标并同步到客户端 */
+    public void setAnchor(double x, double y, double z) {
+        this.anchorX = x;
+        this.anchorY = y;
+        this.anchorZ = z;
+        this.setChanged();
+        this.sendData();
+        sendAnchorDataToClients();
+        IACP.LOGGER.info("[TurretBase] 锚点A已更新为 ({}, {}, {})", x, y, z);
+    }
+
+    /**
+     * 将锚点数据和线条数据通过专用 S2C 包推送到客户端。
+     */
+    private void sendAnchorDataToClients() {
+        if (this.level == null || this.level.isClientSide || this.grindstoneSubLevelId == null) return;
+        try {
+            ServerLevel serverLevel = (ServerLevel) this.level;
+            ServerSubLevelContainer container = (ServerSubLevelContainer) SubLevelContainer.getContainer(serverLevel);
+            if (container == null) return;
+            ServerSubLevel sub = (ServerSubLevel) container.getSubLevel(this.grindstoneSubLevelId);
+            if (sub == null || sub.isRemoved()) {
+                // SubLevel 不可用，只发锚点数据（线条设为原点）
+                sendAnchorOnly(serverLevel);
+                return;
+            }
+            var pose = sub.logicalPose();
+            if (pose == null) {
+                sendAnchorOnly(serverLevel);
+                return;
+            }
+            Vector3d o = pose.transformPosition(new Vector3d(anchorX, anchorY, anchorZ));
+            Vector3d x = pose.transformPosition(new Vector3d(anchorX + 20, anchorY, anchorZ));
+            Vector3d y = pose.transformPosition(new Vector3d(anchorX, anchorY + 20, anchorZ));
+            Vector3d z = pose.transformPosition(new Vector3d(anchorX, anchorY, anchorZ + 20));
+
+            AnchorDataS2CPacket packet = new AnchorDataS2CPacket(
+                    this.grindstoneSubLevelId,
+                    anchorX, anchorY, anchorZ,
+                    new double[]{o.x, o.y, o.z, x.x, x.y, x.z, y.x, y.y, y.z, z.x, z.y, z.z}
+            );
+            PacketDistributor.sendToPlayersTrackingChunk(serverLevel,
+                    new ChunkPos(this.worldPosition), packet);
+            IACP.LOGGER.info("[TurretBase] 已推送锚点+线条数据到客户端");
+        } catch (Exception e) {
+            IACP.LOGGER.error("[TurretBase] 推送锚点数据失败", e);
+        }
+    }
+
+    /** 当 SubLevel 不可用时，只发送锚点坐标，线条全零 */
+    private void sendAnchorOnly(ServerLevel serverLevel) {
+        AnchorDataS2CPacket packet = new AnchorDataS2CPacket(
+                this.grindstoneSubLevelId,
+                anchorX, anchorY, anchorZ,
+                new double[12]
+        );
+        PacketDistributor.sendToPlayersTrackingChunk(serverLevel,
+                new ChunkPos(this.worldPosition), packet);
+    }
+
+    /** 返回避雷针 SubLevel 的 UUID */
+    @Nullable
+    public UUID getLightningRodSubLevelId() {
+        return this.lightningRodSubLevelId;
+    }
+
+    /**
+     * 更改避雷针的朝向。
+     */
+    public void setLightningRodFacing(Direction facing) {
+        if (this.lightningRodSubLevelId == null || this.level == null || this.level.isClientSide) return;
+        try {
+            ServerLevel serverLevel = (ServerLevel) this.level;
+            ServerSubLevelContainer container = (ServerSubLevelContainer) SubLevelContainer.getContainer(serverLevel);
+            if (container == null) return;
+            ServerSubLevel subLevel = (ServerSubLevel) container.getSubLevel(this.lightningRodSubLevelId);
+            if (subLevel == null || subLevel.isRemoved()) return;
+
+            LevelPlot plot = subLevel.getPlot();
+            if (plot == null) return;
+
+            BlockState newState = Blocks.LIGHTNING_ROD.defaultBlockState()
+                    .setValue(net.minecraft.world.level.block.LightningRodBlock.FACING, facing)
+                    .setValue(net.minecraft.world.level.block.LightningRodBlock.POWERED, false);
+            plot.getEmbeddedLevelAccessor().setBlock(BlockPos.ZERO, newState, 3);
+            IACP.LOGGER.info("[TurretBase] 避雷针朝向已更改为 {}", facing);
+        } catch (Exception e) {
+            IACP.LOGGER.error("[TurretBase] 更改避雷针朝向失败", e);
+        }
+    }
+
+    /**
+     * 更改砂轮的朝向。
+     */
+    public void setGrindstoneFacing(Direction facing) {
+        if (this.grindstoneSubLevelId == null || this.level == null || this.level.isClientSide) return;
+        try {
+            ServerLevel serverLevel = (ServerLevel) this.level;
+            ServerSubLevelContainer container = (ServerSubLevelContainer) SubLevelContainer.getContainer(serverLevel);
+            if (container == null) return;
+            ServerSubLevel subLevel = (ServerSubLevel) container.getSubLevel(this.grindstoneSubLevelId);
+            if (subLevel == null || subLevel.isRemoved()) return;
+
+            LevelPlot plot = subLevel.getPlot();
+            if (plot == null) return;
+
+            BlockState newState = Blocks.GRINDSTONE.defaultBlockState()
+                    .setValue(net.minecraft.world.level.block.GrindstoneBlock.FACING, facing);
+            plot.getEmbeddedLevelAccessor().setBlock(BlockPos.ZERO, newState, 3);
+            IACP.LOGGER.info("[TurretBase] 砂轮朝向已更改为 {}", facing);
+        } catch (Exception e) {
+            IACP.LOGGER.error("[TurretBase] 更改砂轮朝向失败", e);
+        }
+    }
+
+    // ==================================================================
+    //  私有工具方法
+    // ==================================================================
+
+    /** 安全移除约束 */
+    private static void removeConstraint(@Nullable PhysicsConstraintHandle handle) {
+        if (handle == null) return;
+        try {
+            if (handle.isValid()) {
+                handle.remove();
+            }
+        } catch (Exception e) {
+            IACP.LOGGER.warn("[TurretBase] 移除约束异常: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * 根据 UUID 移除 SubLevel（安全，处理 null 和已移除的情况）。
+     */
+    private static void removeSubLevelById(ServerSubLevelContainer container, @Nullable UUID uuid) {
+        if (uuid == null) return;
+        try {
+            ServerSubLevel subLevel = (ServerSubLevel) container.getSubLevel(uuid);
+            if (subLevel != null && !subLevel.isRemoved()) {
+                container.removeSubLevel(subLevel, SubLevelRemovalReason.REMOVED);
+            }
+        } catch (Exception e) {
+            IACP.LOGGER.warn("[TurretBase] 移除 SubLevel {} 异常: {}", uuid, e.getMessage());
+        }
+    }
+
+    // ==================================================================
+    //  工具方法
+    // ==================================================================
+
+    public boolean isAssembled() {
+        return this.assembled;
+    }
+
+    /**
+     * 初始化单方块 SubLevel：创建 chunk，放置方块，注册到物理引擎。
+     */
+    private static void initSingleBlockSubLevel(ServerSubLevel subLevel, BlockState blockState) {
+        LevelPlot plot = subLevel.getPlot();
+        if (plot == null) {
+            IACP.LOGGER.error("[TurretBase] initSingleBlockSubLevel: plot 为空！blockState={}", blockState);
+            return;
+        }
+        ChunkPos center = plot.getCenterChunk();
+        IACP.LOGGER.info("[TurretBase] initSingleBlockSubLevel: plot.centerChunk={}", center);
+        try {
+            plot.newEmptyChunk(center);
+        } catch (Exception e) {
+            IACP.LOGGER.error("[TurretBase] newEmptyChunk 失败！center={}", center, e);
+            return;
+        }
+        try {
+            plot.getEmbeddedLevelAccessor().setBlock(BlockPos.ZERO, blockState, 3);
+        } catch (Exception e) {
+            IACP.LOGGER.error("[TurretBase] setBlock 失败！", e);
+            return;
+        }
+        try {
+            subLevel.updateMergedMassData(0.001f);
+        } catch (Exception e) {
+            IACP.LOGGER.warn("[TurretBase] updateMergedMassData 异常（非致命）", e);
+        }
+        IACP.LOGGER.info("[TurretBase] initSingleBlockSubLevel ✅ blockState={}", blockState);
+    }
+
+    /**
+     * 从起点向上搜索，找到 6 面均为空气的位置。
+     */
+    @Nullable
+    private static BlockPos findEmptySpot(Level level, BlockPos origin) {
+        for (int y = origin.getY() + 3; y <= level.getMaxBuildHeight() - 2; y++) {
+            BlockPos candidate = new BlockPos(origin.getX(), y, origin.getZ());
+            if (isAllFacesAir(level, candidate)) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private static boolean isAllFacesAir(Level level, BlockPos pos) {
+        return level.getBlockState(pos).isAir()
+                && level.getBlockState(pos.above()).isAir()
+                && level.getBlockState(pos.below()).isAir()
+                && level.getBlockState(pos.north()).isAir()
+                && level.getBlockState(pos.south()).isAir()
+                && level.getBlockState(pos.east()).isAir()
+                && level.getBlockState(pos.west()).isAir();
+    }
+
+    // ==================================================================
+    //  NBT 持久化
+    // ==================================================================
+
+    @Override
+    protected void write(CompoundTag tag, HolderLookup.Provider registries, boolean clientPacket) {
+        super.write(tag, registries, clientPacket);
+        tag.putBoolean("Assembled", this.assembled);
+        if (this.grindstoneSubLevelId != null) {
+            tag.putUUID("GrindstoneSubLevel", this.grindstoneSubLevelId);
+        }
+        if (this.lightningRodSubLevelId != null) {
+            tag.putUUID("LightningRodSubLevel", this.lightningRodSubLevelId);
+        }
+        if (this.vehicleSubLevelId != null) {
+            tag.putUUID("VehicleSubLevel", this.vehicleSubLevelId);
+        }
+        // 锚点坐标持久化
+        tag.putDouble("AnchorX", this.anchorX);
+        tag.putDouble("AnchorY", this.anchorY);
+        tag.putDouble("AnchorZ", this.anchorZ);
+
+        // （齿轮驱动已移除，TargetAngle 不再持久化）
+        // 客户端同步：计算世界空间中的轴线端点，供渲染器直接使用
+        if (clientPacket && this.grindstoneSubLevelId != null && this.level instanceof ServerLevel sl) {
+            ServerSubLevelContainer c = (ServerSubLevelContainer) SubLevelContainer.getContainer(sl);
+            if (c != null) {
+                ServerSubLevel sub = (ServerSubLevel) c.getSubLevel(this.grindstoneSubLevelId);
+                if (sub != null && !sub.isRemoved()) {
+                    var pose = sub.logicalPose();
+                    if (pose != null) {
+                        var o = pose.transformPosition(new Vector3d(anchorX, anchorY, anchorZ));
+                        var x = pose.transformPosition(new Vector3d(anchorX + 20, anchorY, anchorZ));
+                        var y = pose.transformPosition(new Vector3d(anchorX, anchorY + 20, anchorZ));
+                        var z = pose.transformPosition(new Vector3d(anchorX, anchorY, anchorZ + 20));
+                        tag.putDouble("LOX", o.x); tag.putDouble("LOY", o.y); tag.putDouble("LOZ", o.z);
+                        tag.putDouble("LXX", x.x); tag.putDouble("LXY", x.y); tag.putDouble("LXZ", x.z);
+                        tag.putDouble("LYX", y.x); tag.putDouble("LYY", y.y); tag.putDouble("LYZ", y.z);
+                        tag.putDouble("LZX", z.x); tag.putDouble("LZY", z.y); tag.putDouble("LZZ", z.z);
+                    }
+                }
+            }
+        }
+    }
+
+    @Override
+    protected void read(CompoundTag tag, HolderLookup.Provider registries, boolean clientPacket) {
+        super.read(tag, registries, clientPacket);
+        this.assembled = tag.getBoolean("Assembled");
+        if (tag.hasUUID("GrindstoneSubLevel")) {
+            this.grindstoneSubLevelId = tag.getUUID("GrindstoneSubLevel");
+        } else {
+            this.grindstoneSubLevelId = null;
+        }
+        if (tag.hasUUID("LightningRodSubLevel")) {
+            this.lightningRodSubLevelId = tag.getUUID("LightningRodSubLevel");
+        } else {
+            this.lightningRodSubLevelId = null;
+        }
+        if (tag.hasUUID("VehicleSubLevel")) {
+            this.vehicleSubLevelId = tag.getUUID("VehicleSubLevel");
+        } else {
+            this.vehicleSubLevelId = null;
+        }
+        // 锚点坐标
+        this.anchorX = tag.getDouble("AnchorX");
+        this.anchorY = tag.getDouble("AnchorY");
+        this.anchorZ = tag.getDouble("AnchorZ");
+
+        // （齿轮驱动已移除，TargetAngle 不再读取）
+        // 只要有 UUID 就更新静态缓存（无论 clientPacket 与否）
+        if (this.grindstoneSubLevelId != null) {
+            GRINDSTONE_ANCHOR_MAP.put(this.grindstoneSubLevelId,
+                    new double[]{anchorX, anchorY, anchorZ});
+            if (tag.contains("LOX")) {
+                GRINDSTONE_LINE_CACHE.put(this.grindstoneSubLevelId, new double[]{
+                        tag.getDouble("LOX"), tag.getDouble("LOY"), tag.getDouble("LOZ"),
+                        tag.getDouble("LXX"), tag.getDouble("LXY"), tag.getDouble("LXZ"),
+                        tag.getDouble("LYX"), tag.getDouble("LYY"), tag.getDouble("LYZ"),
+                        tag.getDouble("LZX"), tag.getDouble("LZY"), tag.getDouble("LZZ")
+                });
+            }
+        }
+
+        // ================================================================
+        //  更新地毯位置缓存（客户端）：用于 AxisLineRenderer 在主世界定位
+        //  通过 Sable.HELPER.getContaining() 获取地毯所在的 SubLevel
+        //  后续可以直接用 subLevelPose.transformPosition(localPos) 算出世界坐标
+        // ================================================================
+        if (clientPacket && this.level != null && this.level.isClientSide) {
+            try {
+                SubLevel containing = Sable.HELPER.getContaining(this);
+                if (containing != null) {
+                    CARPET_LOCAL_POS_MAP.computeIfAbsent(containing.getUniqueId(), k -> new java.util.ArrayList<>())
+                            .add(this.worldPosition);
+                    // 日志已移除（性能优化）
+                }
+            } catch (Exception e) {
+                IACP.LOGGER.warn("[TurretBase] 更新地毯位置缓存失败（非致命）", e);
+            }
+        }
+    }
+}

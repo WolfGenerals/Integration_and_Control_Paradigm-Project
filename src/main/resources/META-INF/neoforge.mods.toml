@@ -1,0 +1,40 @@
+modLoader="javafml"
+loaderVersion="[4,)"
+
+license="LGPL-3.0-only"
+
+[[mods]]
+modId="iac_p"
+version="1.0.0"
+displayName="Integration and Control : Paradigm"
+authors="HaiNaBaiChuan75"
+description='''
+中控载具工坊：范式 (IAC-P) - 在 Create 机械动力、Simulated-Project (Sable 物理引擎 + SubLevel 系统) 及 Offroad/Aeronautics 模块之上，添加载具控制、武器系统和 HUD 的整合层模组。
+'''
+displayURL="https://github.com/HaiNaBaiChuan75/IAC-P"
+issueTrackerURL="https://github.com/HaiNaBaiChuan75/IAC-P/issues"
+
+# 模组依赖声明
+[[dependencies.iac_p]]
+    modId="neoforge"
+    type="required"
+    versionRange="[${neo_version},)"
+    ordering="NONE"
+    side="BOTH"
+
+[[dependencies.iac_p]]
+    modId="create"
+    type="required"
+    versionRange="[6.0,7.0)"
+    ordering="NONE"
+    side="BOTH"
+
+[[mixins]]
+config = "iac_p.mixins.json"
+
+[[dependencies.iac_p]]
+    modId="simulated"
+    type="required"
+    versionRange="[1.0,2.0)"
+    ordering="NONE"
+    side="BOTH"

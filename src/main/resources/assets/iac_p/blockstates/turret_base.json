@@ -1,0 +1,7 @@
+{
+  "variants": {
+    "": {
+      "model": "iac_p:block/turret_base"
+    }
+  }
+}

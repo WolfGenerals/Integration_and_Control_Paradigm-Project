@@ -1,0 +1,19 @@
+{
+  "variants": {
+    "facing=north": {
+      "model": "iac_p:block/suspension_test"
+    },
+    "facing=east": {
+      "model": "iac_p:block/suspension_test",
+      "y": 90
+    },
+    "facing=south": {
+      "model": "iac_p:block/suspension_test",
+      "y": 180
+    },
+    "facing=west": {
+      "model": "iac_p:block/suspension_test",
+      "y": 270
+    }
+  }
+}

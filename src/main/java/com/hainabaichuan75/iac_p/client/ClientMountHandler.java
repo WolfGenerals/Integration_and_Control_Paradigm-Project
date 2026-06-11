@@ -1,0 +1,324 @@
+package com.hainabaichuan75.iac_p.client;
+
+import com.hainabaichuan75.iac_p.IACP;
+import com.hainabaichuan75.iac_p.content.blocks.suspension_test.SuspensionTestBlock;
+import dev.ryanhcode.sable.api.sublevel.SubLevelContainer;
+import dev.ryanhcode.sable.companion.math.BoundingBox3ic;
+import dev.ryanhcode.sable.companion.math.BoundingBox3i;
+import dev.ryanhcode.sable.sublevel.ClientSubLevel;
+import dev.ryanhcode.sable.sublevel.SubLevel;
+import dev.ryanhcode.sable.sublevel.plot.LevelPlot;
+import dev.ryanhcode.sable.sublevel.plot.PlotChunkHolder;
+import net.minecraft.client.CameraType;
+import net.minecraft.client.Minecraft;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.Vec3;
+import net.neoforged.api.distmarker.Dist;
+import net.neoforged.api.distmarker.OnlyIn;
+import net.neoforged.bus.api.SubscribeEvent;
+import net.neoforged.fml.common.EventBusSubscriber;
+import net.neoforged.neoforge.client.event.ClientTickEvent;
+
+import java.util.HashMap;
+import java.util.Map;
+import java.util.UUID;
+
+/**
+ * 客户端骑乘状态处理器 —— Plan B 实现。
+ * <p>
+ * 核心改动：相机不再跟随玩家实体，而是直接绑定到 SubLevel 的 {@code renderPose()}
+ * （Create Simulated 已经处理好的平滑插值变换），彻底消除玩家实体插值和
+ * SubLevel 渲染插值之间的冲突。
+ * <p>
+ * 额外处理：
+ * <ul>
+ *   <li>重新进入世界时重置骑乘状态</li>
+ *   <li>骑乘时禁止交互、隐藏手部渲染</li>
+ * </ul>
+ */
+@OnlyIn(Dist.CLIENT)
+@EventBusSubscriber(modid = IACP.MODID, value = Dist.CLIENT)
+public class ClientMountHandler {
+
+    private static boolean isMounted = false;
+    /** Plan B: 当前骑乘的 SubLevel UUID，用于在客户端获取 renderPose() */
+    private static UUID mountedSubLevelUUID = null;
+
+    /** 上车时由服务端同步的载具实际物理质量（kg），用于调试覆盖层显示 */
+    private static double vehicleMass = 0;
+
+    /** 驾驶舱方块在 SubLevel Plot 中的本地位置（底部中心），用于客户端位置同步 */
+    private static double cockpitLocalX, cockpitLocalY, cockpitLocalZ;
+
+    // ====== 载具朝向缓存（WASD 智能映射用） ======
+
+    /** SubLevel UUID → 悬挂朝向统计缓存。上车/扫描时填充，下车时清空。 */
+    private static final Map<UUID, VehicleOrientationData> ORIENTATION_CACHE = new HashMap<>();
+
+    /**
+     * 扫描指定 SubLevel 内所有悬挂方块的 HORIZONTAL_FACING，统计四个方向的数目。
+     *
+     * @param subLevel 要扫描的 SubLevel（客户端或服务端均可）
+     * @param level    主世界 Level 实例
+     * @return 悬挂朝向统计数据
+     */
+    public static VehicleOrientationData scanOrientation(SubLevel subLevel, Level level) {
+        int north = 0, south = 0, east = 0, west = 0;
+
+        LevelPlot plot = subLevel.getPlot();
+        if (plot == null) return new VehicleOrientationData(0, 0, 0, 0);
+
+        for (PlotChunkHolder chunk : plot.getLoadedChunks()) {
+            BoundingBox3ic localBounds = chunk.getBoundingBox();
+            if (localBounds == null || localBounds == BoundingBox3i.EMPTY) continue;
+
+            int chunkMinX = chunk.getPos().getMinBlockX();
+            int chunkMinZ = chunk.getPos().getMinBlockZ();
+
+            for (int x = localBounds.minX(); x <= localBounds.maxX(); x++) {
+                for (int y = localBounds.minY(); y <= localBounds.maxY(); y++) {
+                    for (int z = localBounds.minZ(); z <= localBounds.maxZ(); z++) {
+                        BlockPos worldPos = new BlockPos(x + chunkMinX, y, z + chunkMinZ);
+                        BlockState state = level.getBlockState(worldPos);
+                        if (!(state.getBlock() instanceof SuspensionTestBlock)) continue;
+
+                        Direction facing = state.getValue(SuspensionTestBlock.HORIZONTAL_FACING);
+                        switch (facing) {
+                            case NORTH -> north++;
+                            case SOUTH -> south++;
+                            case EAST  -> east++;
+                            case WEST  -> west++;
+                        }
+                    }
+                }
+            }
+        }
+
+        VehicleOrientationData data = new VehicleOrientationData(north, south, east, west);
+        // 缓存到 SubLevel UUID
+        ORIENTATION_CACHE.put(subLevel.getUniqueId(), data);
+        return data;
+    }
+
+    /**
+     * 从缓存获取指定 SubLevel 的悬挂朝向数据。
+     *
+     * @param subLevelUUID SubLevel 的 UUID
+     * @return 缓存的朝向数据，如果未扫描则返回空数据
+     */
+    public static VehicleOrientationData getOrientationData(UUID subLevelUUID) {
+        return ORIENTATION_CACHE.getOrDefault(subLevelUUID, new VehicleOrientationData(0, 0, 0, 0));
+    }
+
+    /**
+     * 清除指定 SubLevel 的朝向缓存。
+     */
+    public static void clearOrientationCache(UUID subLevelUUID) {
+        ORIENTATION_CACHE.remove(subLevelUUID);
+    }
+
+    /** 清除所有朝向缓存。下车/断线时调用。 */
+    private static void clearAllOrientationCache() {
+        ORIENTATION_CACHE.clear();
+    }
+
+    // ====== 智能映射状态缓存 ======
+
+    /** 当前载具的智能映射是否已启用（从 CockpitBE 同步） */
+    private static boolean smartMappingActive = false;
+
+    public static boolean isSmartMappingActive() { return smartMappingActive; }
+    public static void setSmartMappingActive(boolean active) { smartMappingActive = active; }
+
+    /**
+     * 在 SubLevel 中查找驾驶舱 BE，同步其 smartMappingActive 状态到缓存。
+     */
+    public static void syncSmartMappingState(SubLevel subLevel, Level level) {
+        smartMappingActive = false;
+        LevelPlot plot = subLevel.getPlot();
+        if (plot == null) return;
+
+        for (PlotChunkHolder chunk : plot.getLoadedChunks()) {
+            BoundingBox3ic localBounds = chunk.getBoundingBox();
+            if (localBounds == null || localBounds == BoundingBox3i.EMPTY) continue;
+
+            int chunkMinX = chunk.getPos().getMinBlockX();
+            int chunkMinZ = chunk.getPos().getMinBlockZ();
+
+            for (int x = localBounds.minX(); x <= localBounds.maxX(); x++) {
+                for (int y = localBounds.minY(); y <= localBounds.maxY(); y++) {
+                    for (int z = localBounds.minZ(); z <= localBounds.maxZ(); z++) {
+                        BlockPos worldPos = new BlockPos(x + chunkMinX, y, z + chunkMinZ);
+                        BlockState state = level.getBlockState(worldPos);
+                        if (state.getBlock() instanceof com.hainabaichuan75.iac_p.content.blocks.cockpit.CockpitBlock) {
+                            BlockEntity be = level.getBlockEntity(worldPos);
+                            if (be instanceof com.hainabaichuan75.iac_p.content.blocks.cockpit.CockpitBlockEntity cockpit) {
+                                smartMappingActive = cockpit.isSmartMappingActive();
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ====== 公开 API ======
+
+    /**
+     * 处理上车/下车状态（由 {@code MountedStateS2CPacket} 调用）。
+     *
+     * @param mounted      是否上车
+     * @param subLevelUUID 上车时对应的 SubLevel UUID（下车时传空值）
+     * @param cx           驾驶舱本地 X（底部中心）
+     * @param cy           驾驶舱本地 Y（底部）
+     * @param cz           驾驶舱本地 Z（底部中心）
+     */
+    public static void handleMountState(boolean mounted, UUID subLevelUUID,
+                                        double cx, double cy, double cz) {
+        isMounted = mounted;
+        mountedSubLevelUUID = mounted ? subLevelUUID : null;
+        cockpitLocalX = cx;
+        cockpitLocalY = cy;
+        cockpitLocalZ = cz;
+
+        var mc = Minecraft.getInstance();
+        if (mounted) {
+            mc.options.setCameraType(CameraType.THIRD_PERSON_BACK);
+
+            // 上车时自动扫描载具悬挂朝向，缓存供 WASD 智能映射使用
+            ClientSubLevel clientSubLevel = getMountedClientSubLevel();
+            if (clientSubLevel != null && mc.level != null) {
+                scanOrientation(clientSubLevel, mc.level);
+                // 同步智能映射开关状态
+                syncSmartMappingState(clientSubLevel, mc.level);
+            }
+        } else {
+            mc.options.setCameraType(CameraType.FIRST_PERSON);
+            // 恢复玩家可见性（骑乘时被设为不可见以抑制粒子）
+            mc.player.setInvisible(false);
+            // 下车时清除缓存
+            clearAllOrientationCache();
+            smartMappingActive = false;
+        }
+    }
+
+    public static boolean isMounted() {
+        return isMounted;
+    }
+
+    /** @return 服务端同步的载具实际质量（kg），驾驶舱接入时有效 */
+    public static double getVehicleMass() { return vehicleMass; }
+
+    /** 由 {@link com.hainabaichuan75.iac_p.network.packets.MountedStateS2CPacket} 调用，设置实际质量 */
+    public static void setVehicleMass(double mass) { vehicleMass = mass; }
+
+    /**
+     * 获取当前骑乘的 SubLevel（客户端），用于 Mixin 在渲染阶段获取 renderPose。
+     */
+    public static ClientSubLevel getMountedClientSubLevel() {
+        if (!isMounted || mountedSubLevelUUID == null) return null;
+        var mc = Minecraft.getInstance();
+        if (mc.level == null) return null;
+        SubLevelContainer container = SubLevelContainer.getContainer(mc.level);
+        if (container == null) return null;
+        SubLevel subLevel = container.getSubLevel(mountedSubLevelUUID);
+        if (!(subLevel instanceof ClientSubLevel clientSubLevel)) return null;
+        return clientSubLevel;
+    }
+
+    // ====== 重新进入世界时重置状态 ======
+
+    /**
+     * 当客户端玩家加入/重新进入世界时，重置骑乘状态。
+     * <p>
+     * 解决：玩家在"上车"状态退出单人游戏后再进入，
+     * 客户端 isMounted 仍为 true 导致控制权被错误剥夺的问题。
+     */
+    @SubscribeEvent
+    public static void onClientLogin(net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent.LoggingIn event) {
+        if (isMounted) {
+            isMounted = false;
+            mountedSubLevelUUID = null;
+            // 确保恢复第一人称
+            var mc = Minecraft.getInstance();
+            mc.options.setCameraType(CameraType.FIRST_PERSON);
+        }
+    }
+
+    // ====== 每 Client Tick：Plan B 摄像机跟随 ======
+
+    /**
+     * 每 client tick 将玩家位置同步到驾驶舱方块底部中心。
+     * <p>
+     * 使用 {@code renderPose(partialTick)} 确保玩家模型与 SubLevel 渲染位置平滑对齐。
+     * 零碰撞箱避免客户端碰撞检测干扰。
+     * 偏航角由 SubLevel 位姿变化决定，使玩家视觉模型始终面向车辆前进方向。
+     */
+    @SubscribeEvent
+    public static void onClientTick(ClientTickEvent.Post event) {
+        if (!isMounted) return;
+        var mc = Minecraft.getInstance();
+        if (mc.player == null || mc.level == null) return;
+
+        // 强制第三人称背面，让 F5 失效
+        mc.options.setCameraType(CameraType.THIRD_PERSON_BACK);
+
+        // 无物理（防止服务端 SubLevel 刚体碰撞网格交互）
+        mc.player.noPhysics = true;
+
+        // 零体积碰撞箱：使原版碰撞系统和 Sable SubLevelEntityCollision 均忽略该实体
+        var p = mc.player;
+        mc.player.setBoundingBox(new net.minecraft.world.phys.AABB(
+                p.getX(), p.getY(), p.getZ(),
+                p.getX(), p.getY(), p.getZ()));
+
+        // 速度归零
+        mc.player.setDeltaMovement(Vec3.ZERO);
+
+        // 禁用行走/奔跑动画（腿部和手臂保持静止）
+        // walkAnimation.speed/position 设为 0 冻结肢体摆动。
+        // walkDist = oWalkDist 使游戏认为行走距离增量为零，
+        // 防止 aiStep() 中通过位置变化量重新计算动画。
+        mc.player.walkAnimation.speed(0.0f);
+        mc.player.walkAnimation.position(0.0f);
+        // oWalkDist 是 LivingEntity 私有字段，不可直接访问。
+        // walkAnimation 冻结由 RenderPlayerEvent.Pre 在渲染阶段执行。
+
+        // === 玩家位置同步到驾驶舱方块底部（使用 renderPose 平滑插值） ===
+        ClientSubLevel clientSubLevel = getMountedClientSubLevel();
+        if (clientSubLevel == null) return;
+
+        float partialTick = mc.getTimer().getGameTimeDeltaPartialTick(false);
+        var renderPose = clientSubLevel.renderPose(partialTick);
+        if (renderPose == null) return;
+
+        // 驾驶舱本地位置 → 世界空间
+        org.joml.Vector3d worldPos = new org.joml.Vector3d();
+        renderPose.transformPosition(
+                new org.joml.Vector3d(cockpitLocalX, cockpitLocalY, cockpitLocalZ),
+                worldPos);
+
+        var player = mc.player;
+
+        double px = worldPos.x;
+        double py = worldPos.y;
+        double pz = worldPos.z;
+
+        // 玩家不可见（抑制大部分粒子生成，如受伤粒子、进食粒子等）
+        player.setInvisible(true);
+
+        // 同步位置：使用 setPosRaw 避免触发位置相关事件，
+        // 不设置 xo/yo/zo——让 Minecraft 的实体渲染插值系统自然处理
+        // 前后两 tick 之间的平滑过渡，与 SubLevel 的 renderPose
+        // 插值时序保持一致，消除视觉滞后。
+        player.setPosRaw(px, py, pz);
+
+        // 位置日志已移除（性能优化）
+    }
+
+}
