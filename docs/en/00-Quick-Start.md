@@ -22,8 +22,8 @@
 1. Aim your crosshair at the physical structure and press **F** to mount.
 2. **W** = accelerate, **S** = decelerate, **Q** = shift up, **E** = shift down (if inventory opens, press E again).
 3. **A** = turn left, **D** = turn right.
-4. Controls feel wrong? Press **F** to dismount. Aim at a Suspension Test Block and press **C** to open its keybinding config.
-5. Configure keys to your liking. Setting a key to an unused button effectively clears that binding.
+5. Controls feel wrong? Press **F** to dismount. Press **C** while mounted to open the **Vehicle Orientation Screen** — it shows your suspension FACING statistics and offers one-click **Car Mode** (auto-assigns WASD based on wheel layout), **Reverse** (swap W↔S, A↔D), and **Toggle** (enable/disable smart mapping).
+6. Or aim at a Suspension Test Block and press **C** to open its individual keybinding config. Configure keys to your liking. Setting a key to an unused button effectively clears that binding.
 
 ### Shoot
 
@@ -56,8 +56,8 @@
 5.准星对准物理化结构按下 F ,即可上车
 6.W键增加油门，S减少油门，Q升档，E降档（如果打开了物品栏则再点一次E即可）
 7.A键左转，D键右转
-8.如果出现控制不符合驾驶直觉的情况，可以按F下车。准星对准悬挂测试方块按下C键，即可打开单个悬挂配置界面。
-9.配置界面可以按照自己喜好配置，将按键设置成不常用按键可以看作是清空。
+8.如果出现控制不符合驾驶直觉的情况，可以在车上按 **C** 打开**载具朝向信息界面**——显示各悬挂方块朝向分布，提供一键**汽车模式**（根据轮子布局自动分配 WASD）、**反转方向盘**（W↔S, A↔D）、**开关智能映射**。
+9.也可以下车后对准悬挂测试方块按 **C**，打开单个悬挂按键配置界面，按自己喜好配置。将按键设置成不常用按键可以看作是清空。
 
 射击！
 

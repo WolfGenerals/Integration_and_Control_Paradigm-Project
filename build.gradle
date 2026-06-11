@@ -113,6 +113,34 @@ dependencies {
     implementation "maven.modrinth:create:6.0.10+mc1.21.1"
     implementation "maven.modrinth:create-aeronautics:1.2.1+mc1.21.1"
     implementation "maven.modrinth:sable:1.2.2+mc1.21.1"
+
+    // 所有前置模组使用 JarJar 将依赖嵌套在 JAR 内（运行时 NeoForge 处理）。
+    // compileClasspath 不含这些嵌套，导致 "程序包不存在"。
+    // 这里在编译前提取所有 JarJar 嵌套包到 build/jarjar-deps/。
+    def extractJarjars = tasks.register("extractJarjars") {
+        outputs.dir(layout.buildDirectory.dir("jarjar-deps"))
+        doLast {
+            def outputDir = outputs.files.singleFile
+            delete(outputDir)
+            outputDir.mkdirs()
+            def home = System.getProperty("user.home")
+            ["sable", "create-aeronautics", "create"].each { mod ->
+                def base = new File("${home}/.gradle/caches/modules-2/files-2.1/maven.modrinth/${mod}")
+                if (!base.exists()) return
+                base.eachFileRecurse { f ->
+                    if (f.name.endsWith(".jar")) {
+                        zipTree(f).matching {
+                            include "META-INF/jarjar/*.jar"
+                        }.each { nestedJar ->
+                            copy { from zipTree(nestedJar); into outputDir }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    sourceSets.main.compileClasspath += files(extractJarjars.map { layout.buildDirectory.dir("jarjar-deps") })
+    tasks.named("compileJava") { dependsOn(extractJarjars) }
 }
 
 // This block of code expands all declared replace properties in the specified resource targets.

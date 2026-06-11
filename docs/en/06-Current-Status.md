@@ -1,6 +1,6 @@
 # Current Status & Roadmap
 
-> Last updated: 2026-06-11 (i18n Complete + Open Source Ready)
+> Last updated: 2026-06-12 (WASD Smart Mapping Complete)
 
 ## ✅ Completed Features
 
@@ -9,14 +9,15 @@
 | Category | Count | Status |
 | ---------- | :----: | :-----: |
 | Mounting System | 9 | ✅ |
-| Suspension & Control | 11 | 10 ✅ + 1 🔄 |
+| Suspension & Control | 11 | ✅ |
 | Powertrain | 11 | ✅ |
 | Turret & Weapon System | 20 | ✅ |
 | Debugging & Monitoring | 4 | ✅ |
+| Smart Mapping System | 9 | ✅ |
 | Infrastructure | 2 | ✅ |
 | Internationalization (i18n) | 7 | ✅ |
 | Open Source Preparation | 5 | ✅ |
-| **Total** | **69 (functional)** | **68 ✅ + 1 🔄** |
+| **Total** | **78 (functional)** | **78 ✅** |
 
 ## 🐛 Known & Fixed Bugs
 
@@ -40,7 +41,7 @@ All identified bugs have been fixed — see the Chinese documentation for the co
 
 | Feature | Description |
 | --------- | ------------- |
-| **WASD Smart Mapping** | Multi-wheel coordinated input abstraction (in progress) |
+| ~~WASD Smart Mapping~~ | ~~Multi-wheel coordinated input abstraction~~ — ✅ Completed 06-12 |
 | **Part Damage System** | Sable auto-split + block-level HP |
 | **Resource Pack Import System** | Community weapon FX / tire models / sounds |
 
