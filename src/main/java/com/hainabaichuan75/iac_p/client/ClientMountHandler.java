@@ -2,6 +2,7 @@ package com.hainabaichuan75.iac_p.client;
 
 import com.hainabaichuan75.iac_p.IACP;
 import com.hainabaichuan75.iac_p.content.blocks.suspension_test.SuspensionTestBlock;
+import com.hainabaichuan75.iac_p.content.blocks.suspension_test.SuspensionTestBlockEntity;
 import dev.ryanhcode.sable.api.sublevel.SubLevelContainer;
 import dev.ryanhcode.sable.companion.math.BoundingBox3ic;
 import dev.ryanhcode.sable.companion.math.BoundingBox3i;
@@ -131,14 +132,75 @@ public class ClientMountHandler {
     /** 当前载具的智能映射是否已启用（从 CockpitBE 同步） */
     private static boolean smartMappingActive = false;
 
+    /** 当前载具的智能映射方向是否已反转（从 CockpitBE 同步） */
+    private static boolean smartMappingReversed = false;
+
     public static boolean isSmartMappingActive() { return smartMappingActive; }
     public static void setSmartMappingActive(boolean active) { smartMappingActive = active; }
 
+    public static boolean isSmartMappingReversed() { return smartMappingReversed; }
+    public static void setSmartMappingReversed(boolean reversed) { smartMappingReversed = reversed; }
+
     /**
-     * 在 SubLevel 中查找驾驶舱 BE，同步其 smartMappingActive 状态到缓存。
+     * 在客户端本地立即交换所有悬挂方块的智能映射键（W↔S, A↔D）。
+     * 在发送 REVERSE 网络包后立即调用，消除等待服务端同步的延迟窗口期。
+     */
+    public static void localSwapSmartKeys() {
+        var mc = Minecraft.getInstance();
+        if (mc.level == null) return;
+        ClientSubLevel clientSubLevel = getMountedClientSubLevel();
+        if (clientSubLevel == null) return;
+
+        LevelPlot plot = clientSubLevel.getPlot();
+        if (plot == null) return;
+
+        for (PlotChunkHolder chunk : plot.getLoadedChunks()) {
+            BoundingBox3ic localBounds = chunk.getBoundingBox();
+            if (localBounds == null || localBounds == BoundingBox3i.EMPTY) continue;
+
+            int chunkMinX = chunk.getPos().getMinBlockX();
+            int chunkMinZ = chunk.getPos().getMinBlockZ();
+
+            for (int x = localBounds.minX(); x <= localBounds.maxX(); x++) {
+                for (int y = localBounds.minY(); y <= localBounds.maxY(); y++) {
+                    for (int z = localBounds.minZ(); z <= localBounds.maxZ(); z++) {
+                        BlockPos worldPos = new BlockPos(x + chunkMinX, y, z + chunkMinZ);
+                        BlockState state = mc.level.getBlockState(worldPos);
+                        if (!(state.getBlock() instanceof SuspensionTestBlock)) continue;
+
+                        BlockEntity be = mc.level.getBlockEntity(worldPos);
+                        if (!(be instanceof SuspensionTestBlockEntity sbe)) continue;
+
+                        String oldFwd = sbe.getSmartKeyForward();
+                        String oldBwd = sbe.getSmartKeyBackward();
+                        String oldLeft = sbe.getSmartKeyLeft();
+                        String oldRight = sbe.getSmartKeyRight();
+
+                        // 仅当有智能映射键时才反转
+                        if (oldFwd.isEmpty() && oldBwd.isEmpty()
+                                && oldLeft.isEmpty() && oldRight.isEmpty()) continue;
+
+                        sbe.setSmartKeyBindings(
+                                oldBwd.isEmpty() ? oldFwd : oldBwd,  // W↔S
+                                oldFwd.isEmpty() ? oldBwd : oldFwd,
+                                oldRight.isEmpty() ? oldLeft : oldRight, // A↔D
+                                oldLeft.isEmpty() ? oldRight : oldLeft,
+                                sbe.getActiveKeyBrake()
+                        );
+                    }
+                }
+            }
+        }
+        // 同步客户端缓存状态（切换：再点一次恢复）
+        smartMappingReversed = !smartMappingReversed;
+    }
+
+    /**
+     * 在 SubLevel 中查找驾驶舱 BE，同步其 smartMappingActive/smartMappingReversed 状态到缓存。
      */
     public static void syncSmartMappingState(SubLevel subLevel, Level level) {
         smartMappingActive = false;
+        smartMappingReversed = false;
         LevelPlot plot = subLevel.getPlot();
         if (plot == null) return;
 
@@ -158,6 +220,7 @@ public class ClientMountHandler {
                             BlockEntity be = level.getBlockEntity(worldPos);
                             if (be instanceof com.hainabaichuan75.iac_p.content.blocks.cockpit.CockpitBlockEntity cockpit) {
                                 smartMappingActive = cockpit.isSmartMappingActive();
+                                smartMappingReversed = cockpit.isSmartMappingReversed();
                                 return;
                             }
                         }
@@ -204,6 +267,7 @@ public class ClientMountHandler {
             // 下车时清除缓存
             clearAllOrientationCache();
             smartMappingActive = false;
+            smartMappingReversed = false;
         }
     }
 

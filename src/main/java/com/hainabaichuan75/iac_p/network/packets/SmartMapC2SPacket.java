@@ -103,7 +103,7 @@ public class SmartMapC2SPacket implements CustomPacketPayload {
 
             switch (packet.action) {
                 case CAR_MODE -> applyCarMode(subLevel, level, cockpit);
-                case REVERSE -> applyReverse(subLevel, level);
+                case REVERSE -> applyReverse(subLevel, level, cockpit);
                 case TOGGLE_SMART -> toggleSmartMapping(subLevel, level, cockpit);
             }
         });
@@ -183,8 +183,9 @@ public class SmartMapC2SPacket implements CustomPacketPayload {
             sbe.setSmartKeyBindings(fwd, bwd, left, right, sbe.getActiveKeyBrake());
         }
 
-        // 标记智能映射已启用
+        // 标记智能映射已启用，重置反转状态
         cockpit.setSmartMappingActive(true);
+        cockpit.setSmartMappingReversed(false);
         IACP.LOGGER.info("[SmartMap] CAR_MODE applied to SubLevel {} (centroidZ={}, wheels={})",
                 subLevel.getUniqueId(), centroidZ, wheels.size());
     }
@@ -197,7 +198,7 @@ public class SmartMapC2SPacket implements CustomPacketPayload {
      * 反转已设置的智能按键：W↔S, A↔D。
      * 对 SubLevel 内所有悬挂方块的 smartKey 做交换。
      */
-    private static void applyReverse(SubLevel subLevel, ServerLevel level) {
+    private static void applyReverse(SubLevel subLevel, ServerLevel level, CockpitBlockEntity cockpit) {
         LevelPlot plot = subLevel.getPlot();
         if (plot == null) return;
 
@@ -238,6 +239,8 @@ public class SmartMapC2SPacket implements CustomPacketPayload {
                 }
             }
         }
+        // 切换引擎层方向反转（再点一次恢复）
+        cockpit.setSmartMappingReversed(!cockpit.isSmartMappingReversed());
         IACP.LOGGER.info("[SmartMap] REVERSE applied");
     }
 
@@ -285,9 +288,10 @@ public class SmartMapC2SPacket implements CustomPacketPayload {
                 }
             }
             cockpit.setSmartMappingActive(false);
+            cockpit.setSmartMappingReversed(false);
             IACP.LOGGER.info("[SmartMap] TOGGLE OFF: smart keys cleared");
         } else {
-            // 开启：应用汽车模式
+            // 开启：应用汽车模式（applyCarMode 会自动重置 reversed=false）
             applyCarMode(subLevel, level, cockpit);
             IACP.LOGGER.info("[SmartMap] TOGGLE ON: car mode applied");
         }

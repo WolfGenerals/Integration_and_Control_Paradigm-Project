@@ -1,5 +1,6 @@
 package com.hainabaichuan75.iac_p.client.screen;
 
+import com.hainabaichuan75.iac_p.client.ClientMountHandler;
 import com.hainabaichuan75.iac_p.client.VehicleOrientationData;
 import com.hainabaichuan75.iac_p.network.ModNetworking;
 import com.hainabaichuan75.iac_p.network.packets.SmartMapC2SPacket;
@@ -79,6 +80,8 @@ public class VehicleOrientationScreen extends Screen {
                 Component.translatable("screen.iac_p.vehicle_orientation.reverse"),
                 btn -> {
                     sendAction(SmartMapC2SPacket.Action.REVERSE);
+                    // 立即在客户端本地交换智能按键，无需等待服务端同步
+                    ClientMountHandler.localSwapSmartKeys();
                     // 反转后显示提示
                     var mc = net.minecraft.client.Minecraft.getInstance();
                     if (mc.player != null) {
