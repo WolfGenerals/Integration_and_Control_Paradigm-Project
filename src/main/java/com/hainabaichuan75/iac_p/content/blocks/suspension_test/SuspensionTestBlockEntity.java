@@ -5,18 +5,17 @@
 结构如下：
 1. 视觉偏移常量：控制弹簧、转向轴、轮轴的渲染位置，修改后重编生效。
 2. 力学参数常量：包括悬挂弹簧参数、驱动参数、轮胎摩擦参数、刹车参数、二次方速度阻尼、转向参数等，修改后重编生效。
-3. 轮胎物理参数：编译时默认值和运行时可编辑的胎压参数，影响轮胎的物理行为。
-4. 常量访问器：提供静态方法供渲染器和外部系统访问这些常量。
-5. 按键绑定默认值：定义了默认的控制按键，持久化到 NBT。
-6. 运行时状态字段：包括持有的物品、目标转向角、物理状态（伸缩、转向角、触地摩擦等）和力的计算字段。
-7. 构造方法和生命周期方法：初始化状态，处理每 tick 的物理更新，保存/加载 NBT 数据，与客户端同步等。
-8. 物理计算方法：根据当前状态计算弹簧力、摩擦力、驱动力、转向等，并将结果应用到 Sable 物理引擎中。
+3. 轮胎物理参数：编译时默认值和运行时可编辑的参数，控制轮胎的物理行为。
+4. 常量访问器：供渲染器使用的静态方法，返回上述常量值。
+5. 按键绑定默认值：定义了默认的控制按键。
+6. 运行时状态字段：包括持有的物品、目标转向角、物理状态、力等，以及按键绑定和控制输入的状态。
 */
 package com.hainabaichuan75.iac_p.content.blocks.suspension_test;
 
 import com.hainabaichuan75.iac_p.IACP;
 import com.hainabaichuan75.iac_p.content.blocks.cockpit.CockpitBlock;
 import com.hainabaichuan75.iac_p.content.blocks.cockpit.CockpitBlockEntity;
+import com.hainabaichuan75.iac_p.events.SubLevelScanner;
 import com.hainabaichuan75.iac_p.index.ModBlockEntityTypes;
 import com.simibubi.create.foundation.blockEntity.SmartBlockEntity;
 import com.simibubi.create.foundation.blockEntity.behaviour.BlockEntityBehaviour;
@@ -27,16 +26,12 @@ import dev.ryanhcode.sable.api.block.BlockEntitySubLevelActor;
 import dev.ryanhcode.sable.api.physics.force.ForceTotal;
 import dev.ryanhcode.sable.api.physics.handle.RigidBodyHandle;
 import dev.ryanhcode.sable.api.physics.mass.MassData;
-import dev.ryanhcode.sable.companion.math.BoundingBox3ic;
-import dev.ryanhcode.sable.companion.math.BoundingBox3i;
 import dev.ryanhcode.sable.companion.math.JOMLConversion;
 import dev.ryanhcode.sable.companion.math.Pose3dc;
 import dev.ryanhcode.sable.mixinterface.clip_overwrite.ClipContextExtension;
 import dev.ryanhcode.sable.physics.config.block_properties.PhysicsBlockPropertyHelper;
 import dev.ryanhcode.sable.sublevel.ServerSubLevel;
 import dev.ryanhcode.sable.sublevel.SubLevel;
-import dev.ryanhcode.sable.sublevel.plot.LevelPlot;
-import dev.ryanhcode.sable.sublevel.plot.PlotChunkHolder;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.HolderLookup;
@@ -512,26 +507,12 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
         if (container == null) return;
         dev.ryanhcode.sable.sublevel.SubLevel sl = container.getSubLevel(subLevelUUID);
         if (sl == null) return;
-        var plot = sl.getPlot();
-        if (plot == null) return;
 
-        for (PlotChunkHolder chunk : plot.getLoadedChunks()) {
-            BoundingBox3ic localBounds = chunk.getBoundingBox();
-            if (localBounds == null || localBounds == BoundingBox3i.EMPTY) continue;
-            int chunkMinX = chunk.getPos().getMinBlockX();
-            int chunkMinZ = chunk.getPos().getMinBlockZ();
-            for (int x = localBounds.minX(); x <= localBounds.maxX(); x++) {
-                for (int y = localBounds.minY(); y <= localBounds.maxY(); y++) {
-                    for (int z = localBounds.minZ(); z <= localBounds.maxZ(); z++) {
-                        BlockPos worldPos = new BlockPos(x + chunkMinX, y, z + chunkMinZ);
-                        BlockEntity be = level.getBlockEntity(worldPos);
-                        if (be instanceof SuspensionTestBlockEntity sbe) {
-                            sbe.invalidateCache();
-                        }
-                    }
-                }
+        SubLevelScanner.forEachBlock(sl, level, (worldPos, state, be) -> {
+            if (be instanceof SuspensionTestBlockEntity sbe) {
+                sbe.invalidateCache();
             }
-        }
+        });
     }
 
     /**
@@ -1578,37 +1559,19 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
             this.cachedCockpit = null;
         }
 
-        LevelPlot plot = sl.getPlot();
-        if (plot == null) return null;
-
-        for (PlotChunkHolder chunk : plot.getLoadedChunks()) {
-            BoundingBox3ic localBounds = chunk.getBoundingBox();
-            if (localBounds == null || localBounds == BoundingBox3i.EMPTY) continue;
-
-            int chunkMinX = chunk.getPos().getMinBlockX();
-            int chunkMinZ = chunk.getPos().getMinBlockZ();
-
-            for (int x = localBounds.minX(); x <= localBounds.maxX(); x++) {
-                for (int y = localBounds.minY(); y <= localBounds.maxY(); y++) {
-                    for (int z = localBounds.minZ(); z <= localBounds.maxZ(); z++) {
-                        BlockPos worldPos = new BlockPos(x + chunkMinX, y, z + chunkMinZ);
-                        BlockState state = level.getBlockState(worldPos);
-                        if (state.getBlock() instanceof CockpitBlock) {
-                            BlockEntity be = level.getBlockEntity(worldPos);
-                            if (be instanceof CockpitBlockEntity cockpit) {
-                                this.cachedCockpit = cockpit;
-                                return cockpit;
-                            }
-                        }
-                    }
-                }
+        SubLevelScanner.forEachBlock(sl, level, (worldPos, state, be) -> {
+            if (this.cachedCockpit != null) return; // 已找到，跳过
+            if (state.getBlock() instanceof CockpitBlock && be instanceof CockpitBlockEntity cockpit) {
+                this.cachedCockpit = cockpit;
             }
-        }
-        return null;
+        });
+
+        return this.cachedCockpit;
     }
 
     /**
      * 统计当前 SubLevel 内悬挂测试方块的总数（用于动力分配扭矩均摊）。
+     * 使用 {@link SubLevelScanner} 统一遍历。
      */
     private int countSuspensionBlocksInSubLevel(SubLevel sl) {
         // 缓存命中时直接返回（0 表示未缓存）
@@ -1616,30 +1579,13 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
             return this.cachedWheelCount;
         }
 
-        LevelPlot plot = sl.getPlot();
-        if (plot == null) return 0;
-
-        int count = 0;
-        for (PlotChunkHolder chunk : plot.getLoadedChunks()) {
-            BoundingBox3ic localBounds = chunk.getBoundingBox();
-            if (localBounds == null || localBounds == BoundingBox3i.EMPTY) continue;
-
-            int chunkMinX = chunk.getPos().getMinBlockX();
-            int chunkMinZ = chunk.getPos().getMinBlockZ();
-
-            for (int x = localBounds.minX(); x <= localBounds.maxX(); x++) {
-                for (int y = localBounds.minY(); y <= localBounds.maxY(); y++) {
-                    for (int z = localBounds.minZ(); z <= localBounds.maxZ(); z++) {
-                        BlockPos worldPos = new BlockPos(x + chunkMinX, y, z + chunkMinZ);
-                        BlockState state = level.getBlockState(worldPos);
-                        if (state.getBlock() instanceof SuspensionTestBlock) {
-                            count++;
-                        }
-                    }
-                }
+        int[] count = {0};
+        SubLevelScanner.forEachBlockState(sl, level, (worldPos, state) -> {
+            if (state.getBlock() instanceof SuspensionTestBlock) {
+                count[0]++;
             }
-        }
-        this.cachedWheelCount = Math.max(count, 1); // 至少返回 1，避免除零
+        });
+        this.cachedWheelCount = Math.max(count[0], 1); // 至少返回 1，避免除零
         return this.cachedWheelCount;
     }
 }

@@ -3,17 +3,14 @@ package com.hainabaichuan75.iac_p.content.blocks.cockpit;
 import com.hainabaichuan75.iac_p.content.blocks.suspension_test.SuspensionTestBlock;
 import com.hainabaichuan75.iac_p.content.blocks.suspension_test.SuspensionTestBlockEntity;
 import com.hainabaichuan75.iac_p.IACP;
+import com.hainabaichuan75.iac_p.events.SubLevelScanner;
 import com.hainabaichuan75.iac_p.index.ModCockpitBlockEntityTypes;
 import com.simibubi.create.foundation.blockEntity.SmartBlockEntity;
 import com.simibubi.create.foundation.blockEntity.behaviour.BlockEntityBehaviour;
 import dev.ryanhcode.sable.Sable;
 import dev.ryanhcode.sable.api.physics.mass.MassData;
-import dev.ryanhcode.sable.companion.math.BoundingBox3ic;
-import dev.ryanhcode.sable.companion.math.BoundingBox3i;
 import dev.ryanhcode.sable.sublevel.ServerSubLevel;
 import dev.ryanhcode.sable.sublevel.SubLevel;
-import dev.ryanhcode.sable.sublevel.plot.LevelPlot;
-import dev.ryanhcode.sable.sublevel.plot.PlotChunkHolder;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.util.Mth;
@@ -671,66 +668,51 @@ public class CockpitBlockEntity extends SmartBlockEntity {
     private record SubLevelScanResult(int throttleDirection, double loadFactor, double avgWheelRpm) {}
 
     private SubLevelScanResult scanSubLevel(SubLevel sl) {
-        LevelPlot plot = sl.getPlot();
-        if (plot == null) return new SubLevelScanResult(0, 0, 0);
-
-        boolean anyForward = false;
-        boolean anyBackward = false;
-        double totalDemand = 0;
-        double totalMaxForce = 0;
-        double totalRpm = 0;
-        int count = 0;
+        boolean[] anyForward = {false};
+        boolean[] anyBackward = {false};
+        double[] totalDemand = {0};
+        double[] totalMaxForce = {0};
+        double[] totalRpm = {0};
+        int[] count = {0};
 
         double ratio = getCurrentRatio();
         double absRatio = Math.abs(ratio) * FINAL_DRIVE_RATIO;
+        double localEffTorque = this.effectiveTorque;
+        int localGear = this.currentGear;
 
-        for (PlotChunkHolder chunk : plot.getLoadedChunks()) {
-            BoundingBox3ic localBounds = chunk.getBoundingBox();
-            if (localBounds == null || localBounds == BoundingBox3i.EMPTY) continue;
+        SubLevelScanner.forEachBlock(sl, level, (worldPos, state, be) -> {
+            if (!(state.getBlock() instanceof SuspensionTestBlock)) return;
+            if (!(be instanceof SuspensionTestBlockEntity sbe)) return;
 
-            int chunkMinX = chunk.getPos().getMinBlockX();
-            int chunkMinZ = chunk.getPos().getMinBlockZ();
+            // 油门方向
+            if (sbe.isThrottleForward()) anyForward[0] = true;
+            if (sbe.isThrottleBackward()) anyBackward[0] = true;
 
-            for (int x = localBounds.minX(); x <= localBounds.maxX(); x++) {
-                for (int y = localBounds.minY(); y <= localBounds.maxY(); y++) {
-                    for (int z = localBounds.minZ(); z <= localBounds.maxZ(); z++) {
-                        BlockPos worldPos = new BlockPos(x + chunkMinX, y, z + chunkMinZ);
-                        BlockState state = level.getBlockState(worldPos);
-                        if (state.getBlock() instanceof SuspensionTestBlock) {
-                            BlockEntity be = level.getBlockEntity(worldPos);
-                            if (be instanceof SuspensionTestBlockEntity sbe) {
-                                // 油门方向
-                                if (sbe.isThrottleForward()) anyForward = true;
-                                if (sbe.isThrottleBackward()) anyBackward = true;
-                                // 负载因子（仅当在档位中才需要）
-                                if (currentGear != 0) {
-                                    totalDemand += sbe.getTotalEngineLoad();
-                                    double wheelRadius = sbe.getWheelRadius();
-                                    if (wheelRadius > 0.01) {
-                                        totalMaxForce += (this.effectiveTorque * absRatio) / wheelRadius;
-                                    }
-                                }
-                                // 轮速耦合
-                                totalRpm += sbe.getCurrentWheelRpm();
-                                count++;
-                            }
-                        }
-                    }
+            // 负载因子（仅当在档位中才需要）
+            if (localGear != 0) {
+                totalDemand[0] += sbe.getTotalEngineLoad();
+                double wheelRadius = sbe.getWheelRadius();
+                if (wheelRadius > 0.01) {
+                    totalMaxForce[0] += (localEffTorque * absRatio) / wheelRadius;
                 }
             }
-        }
+
+            // 轮速耦合
+            totalRpm[0] += sbe.getCurrentWheelRpm();
+            count[0]++;
+        });
 
         // 油门方向：同时按下或都没按 → 0（互斥）
-        int direction = (anyForward == anyBackward) ? 0 : (anyForward ? +1 : -1);
+        int direction = (anyForward[0] == anyBackward[0]) ? 0 : (anyForward[0] ? +1 : -1);
 
         // 负载因子
         double loadFactor = 0;
-        if (count > 0 && totalMaxForce > 0) {
-            loadFactor = totalDemand / (totalMaxForce / count);
+        if (count[0] > 0 && totalMaxForce[0] > 0) {
+            loadFactor = totalDemand[0] / (totalMaxForce[0] / count[0]);
         }
 
         // 平均轮速
-        double avgWheelRpm = count > 0 ? totalRpm / count : 0.0;
+        double avgWheelRpm = count[0] > 0 ? totalRpm[0] / count[0] : 0.0;
 
         return new SubLevelScanResult(direction, loadFactor, avgWheelRpm);
     }

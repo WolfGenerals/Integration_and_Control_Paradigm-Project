@@ -3,19 +3,15 @@ package com.hainabaichuan75.iac_p.client;
 import com.hainabaichuan75.iac_p.IACP;
 import com.hainabaichuan75.iac_p.content.blocks.suspension_test.SuspensionTestBlock;
 import com.hainabaichuan75.iac_p.content.blocks.suspension_test.SuspensionTestBlockEntity;
+import com.hainabaichuan75.iac_p.events.SubLevelScanner;
 import dev.ryanhcode.sable.api.sublevel.SubLevelContainer;
-import dev.ryanhcode.sable.companion.math.BoundingBox3ic;
-import dev.ryanhcode.sable.companion.math.BoundingBox3i;
 import dev.ryanhcode.sable.sublevel.ClientSubLevel;
 import dev.ryanhcode.sable.sublevel.SubLevel;
-import dev.ryanhcode.sable.sublevel.plot.LevelPlot;
-import dev.ryanhcode.sable.sublevel.plot.PlotChunkHolder;
 import net.minecraft.client.CameraType;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.level.Level;
-import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.api.distmarker.Dist;
@@ -24,7 +20,9 @@ import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -55,6 +53,36 @@ public class ClientMountHandler {
     /** 驾驶舱方块在 SubLevel Plot 中的本地位置（底部中心），用于客户端位置同步 */
     private static double cockpitLocalX, cockpitLocalY, cockpitLocalZ;
 
+    // ====== 悬挂方块位置缓存（性能优化） ======
+
+    /**
+     * 当前载具 SubLevel 中所有悬挂测试方块的世界坐标列表。
+     * 上车时一次性填充，供 {@code sendVehicleControlInput()} 使用，
+     * 避免每 2 tick 全量扫描 SubLevel chunks。
+     */
+    private static final List<BlockPos> SUSPENSION_POSITIONS = new ArrayList<>();
+
+    /**
+     * 获取缓存的悬挂方块位置列表。
+     * 由 {@link com.hainabaichuan75.iac_p.client.ClientEvents#sendVehicleControlInput} 使用。
+     */
+    public static List<BlockPos> getSuspensionPositions() {
+        return SUSPENSION_POSITIONS;
+    }
+
+    /**
+     * 扫描 SubLevel 并刷新悬挂方块位置缓存。
+     * 在 mount 和状态变更时调用。
+     */
+    public static void refreshSuspensionPositions(SubLevel subLevel, Level level) {
+        SUSPENSION_POSITIONS.clear();
+        SubLevelScanner.forEachBlock(subLevel, level, (worldPos, state, be) -> {
+            if (state.getBlock() instanceof SuspensionTestBlock) {
+                SUSPENSION_POSITIONS.add(worldPos);
+            }
+        });
+    }
+
     // ====== 载具朝向缓存（WASD 智能映射用） ======
 
     /** SubLevel UUID → 悬挂朝向统计缓存。上车/扫描时填充，下车时清空。 */
@@ -68,40 +96,26 @@ public class ClientMountHandler {
      * @return 悬挂朝向统计数据
      */
     public static VehicleOrientationData scanOrientation(SubLevel subLevel, Level level) {
-        int north = 0, south = 0, east = 0, west = 0;
+        int[] north = {0}, south = {0}, east = {0}, west = {0};
 
-        LevelPlot plot = subLevel.getPlot();
-        if (plot == null) return new VehicleOrientationData(0, 0, 0, 0);
-
-        for (PlotChunkHolder chunk : plot.getLoadedChunks()) {
-            BoundingBox3ic localBounds = chunk.getBoundingBox();
-            if (localBounds == null || localBounds == BoundingBox3i.EMPTY) continue;
-
-            int chunkMinX = chunk.getPos().getMinBlockX();
-            int chunkMinZ = chunk.getPos().getMinBlockZ();
-
-            for (int x = localBounds.minX(); x <= localBounds.maxX(); x++) {
-                for (int y = localBounds.minY(); y <= localBounds.maxY(); y++) {
-                    for (int z = localBounds.minZ(); z <= localBounds.maxZ(); z++) {
-                        BlockPos worldPos = new BlockPos(x + chunkMinX, y, z + chunkMinZ);
-                        BlockState state = level.getBlockState(worldPos);
-                        if (!(state.getBlock() instanceof SuspensionTestBlock)) continue;
-
-                        Direction facing = state.getValue(SuspensionTestBlock.HORIZONTAL_FACING);
-                        switch (facing) {
-                            case NORTH -> north++;
-                            case SOUTH -> south++;
-                            case EAST  -> east++;
-                            case WEST  -> west++;
-                        }
-                    }
-                }
+        SubLevelScanner.forEachBlockState(subLevel, level, (worldPos, state) -> {
+            if (!(state.getBlock() instanceof SuspensionTestBlock)) return;
+            Direction facing = state.getValue(SuspensionTestBlock.HORIZONTAL_FACING);
+            switch (facing) {
+                case NORTH -> north[0]++;
+                case SOUTH -> south[0]++;
+                case EAST  -> east[0]++;
+                case WEST  -> west[0]++;
             }
-        }
+        });
 
-        VehicleOrientationData data = new VehicleOrientationData(north, south, east, west);
+        VehicleOrientationData data = new VehicleOrientationData(north[0], south[0], east[0], west[0]);
         // 缓存到 SubLevel UUID
         ORIENTATION_CACHE.put(subLevel.getUniqueId(), data);
+
+        // 同时刷新悬挂位置缓存
+        refreshSuspensionPositions(subLevel, level);
+
         return data;
     }
 
@@ -151,46 +165,27 @@ public class ClientMountHandler {
         ClientSubLevel clientSubLevel = getMountedClientSubLevel();
         if (clientSubLevel == null) return;
 
-        LevelPlot plot = clientSubLevel.getPlot();
-        if (plot == null) return;
+        SubLevelScanner.forEachBlock(clientSubLevel, mc.level, (worldPos, state, be) -> {
+            if (!(state.getBlock() instanceof SuspensionTestBlock)) return;
+            if (!(be instanceof SuspensionTestBlockEntity sbe)) return;
 
-        for (PlotChunkHolder chunk : plot.getLoadedChunks()) {
-            BoundingBox3ic localBounds = chunk.getBoundingBox();
-            if (localBounds == null || localBounds == BoundingBox3i.EMPTY) continue;
+            String oldFwd = sbe.getSmartKeyForward();
+            String oldBwd = sbe.getSmartKeyBackward();
+            String oldLeft = sbe.getSmartKeyLeft();
+            String oldRight = sbe.getSmartKeyRight();
 
-            int chunkMinX = chunk.getPos().getMinBlockX();
-            int chunkMinZ = chunk.getPos().getMinBlockZ();
+            // 仅当有智能映射键时才反转
+            if (oldFwd.isEmpty() && oldBwd.isEmpty()
+                    && oldLeft.isEmpty() && oldRight.isEmpty()) return;
 
-            for (int x = localBounds.minX(); x <= localBounds.maxX(); x++) {
-                for (int y = localBounds.minY(); y <= localBounds.maxY(); y++) {
-                    for (int z = localBounds.minZ(); z <= localBounds.maxZ(); z++) {
-                        BlockPos worldPos = new BlockPos(x + chunkMinX, y, z + chunkMinZ);
-                        BlockState state = mc.level.getBlockState(worldPos);
-                        if (!(state.getBlock() instanceof SuspensionTestBlock)) continue;
-
-                        BlockEntity be = mc.level.getBlockEntity(worldPos);
-                        if (!(be instanceof SuspensionTestBlockEntity sbe)) continue;
-
-                        String oldFwd = sbe.getSmartKeyForward();
-                        String oldBwd = sbe.getSmartKeyBackward();
-                        String oldLeft = sbe.getSmartKeyLeft();
-                        String oldRight = sbe.getSmartKeyRight();
-
-                        // 仅当有智能映射键时才反转
-                        if (oldFwd.isEmpty() && oldBwd.isEmpty()
-                                && oldLeft.isEmpty() && oldRight.isEmpty()) continue;
-
-                        sbe.setSmartKeyBindings(
-                                oldBwd.isEmpty() ? oldFwd : oldBwd,  // W↔S
-                                oldFwd.isEmpty() ? oldBwd : oldFwd,
-                                oldRight.isEmpty() ? oldLeft : oldRight, // A↔D
-                                oldLeft.isEmpty() ? oldRight : oldLeft,
-                                sbe.getActiveKeyBrake()
-                        );
-                    }
-                }
-            }
-        }
+            sbe.setSmartKeyBindings(
+                    oldBwd.isEmpty() ? oldFwd : oldBwd,  // W↔S
+                    oldFwd.isEmpty() ? oldBwd : oldFwd,
+                    oldRight.isEmpty() ? oldLeft : oldRight, // A↔D
+                    oldLeft.isEmpty() ? oldRight : oldLeft,
+                    sbe.getActiveKeyBrake()
+            );
+        });
         // 同步客户端缓存状态（切换：再点一次恢复）
         smartMappingReversed = !smartMappingReversed;
     }
@@ -201,33 +196,14 @@ public class ClientMountHandler {
     public static void syncSmartMappingState(SubLevel subLevel, Level level) {
         smartMappingActive = false;
         smartMappingReversed = false;
-        LevelPlot plot = subLevel.getPlot();
-        if (plot == null) return;
 
-        for (PlotChunkHolder chunk : plot.getLoadedChunks()) {
-            BoundingBox3ic localBounds = chunk.getBoundingBox();
-            if (localBounds == null || localBounds == BoundingBox3i.EMPTY) continue;
-
-            int chunkMinX = chunk.getPos().getMinBlockX();
-            int chunkMinZ = chunk.getPos().getMinBlockZ();
-
-            for (int x = localBounds.minX(); x <= localBounds.maxX(); x++) {
-                for (int y = localBounds.minY(); y <= localBounds.maxY(); y++) {
-                    for (int z = localBounds.minZ(); z <= localBounds.maxZ(); z++) {
-                        BlockPos worldPos = new BlockPos(x + chunkMinX, y, z + chunkMinZ);
-                        BlockState state = level.getBlockState(worldPos);
-                        if (state.getBlock() instanceof com.hainabaichuan75.iac_p.content.blocks.cockpit.CockpitBlock) {
-                            BlockEntity be = level.getBlockEntity(worldPos);
-                            if (be instanceof com.hainabaichuan75.iac_p.content.blocks.cockpit.CockpitBlockEntity cockpit) {
-                                smartMappingActive = cockpit.isSmartMappingActive();
-                                smartMappingReversed = cockpit.isSmartMappingReversed();
-                                return;
-                            }
-                        }
-                    }
-                }
+        SubLevelScanner.forEachBlock(subLevel, level, (worldPos, state, be) -> {
+            if (state.getBlock() instanceof com.hainabaichuan75.iac_p.content.blocks.cockpit.CockpitBlock
+                    && be instanceof com.hainabaichuan75.iac_p.content.blocks.cockpit.CockpitBlockEntity cockpit) {
+                smartMappingActive = cockpit.isSmartMappingActive();
+                smartMappingReversed = cockpit.isSmartMappingReversed();
             }
-        }
+        });
     }
 
     // ====== 公开 API ======
@@ -257,6 +233,7 @@ public class ClientMountHandler {
             ClientSubLevel clientSubLevel = getMountedClientSubLevel();
             if (clientSubLevel != null && mc.level != null) {
                 scanOrientation(clientSubLevel, mc.level);
+                // scanOrientation() 内部已调用 refreshSuspensionPositions()
                 // 同步智能映射开关状态
                 syncSmartMappingState(clientSubLevel, mc.level);
             }
@@ -266,6 +243,7 @@ public class ClientMountHandler {
             mc.player.setInvisible(false);
             // 下车时清除缓存
             clearAllOrientationCache();
+            SUSPENSION_POSITIONS.clear();
             smartMappingActive = false;
             smartMappingReversed = false;
         }
@@ -312,6 +290,11 @@ public class ClientMountHandler {
             var mc = Minecraft.getInstance();
             mc.options.setCameraType(CameraType.FIRST_PERSON);
         }
+        // 不论是否挂载，都清理所有缓存（确保重连后状态干净）
+        clearAllOrientationCache();
+        SUSPENSION_POSITIONS.clear();
+        smartMappingActive = false;
+        smartMappingReversed = false;
     }
 
     // ====== 每 Client Tick：Plan B 摄像机跟随 ======

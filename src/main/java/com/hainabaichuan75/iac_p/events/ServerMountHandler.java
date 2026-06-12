@@ -9,13 +9,9 @@ import dev.ryanhcode.sable.sublevel.ServerSubLevel;
 import com.hainabaichuan75.iac_p.network.ModNetworking;
 import com.hainabaichuan75.iac_p.network.packets.MountedStateS2CPacket;
 import dev.ryanhcode.sable.Sable;
-import dev.ryanhcode.sable.companion.math.BoundingBox3ic;
-import dev.ryanhcode.sable.companion.math.BoundingBox3i;
 import dev.ryanhcode.sable.companion.math.Pose3d;
 import dev.ryanhcode.sable.sublevel.SubLevel;
 import dev.ryanhcode.sable.api.sublevel.SubLevelContainer;
-import dev.ryanhcode.sable.sublevel.plot.LevelPlot;
-import dev.ryanhcode.sable.sublevel.plot.PlotChunkHolder;
 import it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
@@ -23,12 +19,16 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.ClipContext;
-import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import org.joml.Vector3d;
+import org.joml.Vector3dc;
+
+import java.util.Set;
 
 import java.util.Map;
 import java.util.UUID;
@@ -107,52 +107,38 @@ public class ServerMountHandler {
         }
         // ====== Scale End ======
 
-        // ====== 步骤 3（目标4）：检查 SubLevel 是否包含驾驶舱核心 ======
-        // 不再要求射线必须命中驾驶舱方块，只要命中的 SubLevel 内有驾驶舱即可
-        BlockState hitState = level.getBlockState(hitPos);
-        boolean hitIsCockpit = hitState.is(ModBlocks.COCKPIT.get())
-                || hitState.is(ModBlocks.SEAT.get());
+        UUID subLevelUUID = subLevel.getUniqueId();
 
-        if (!hitIsCockpit) {
-            // 射线没有直接命中驾驶舱 → 检查 SubLevel 内是否有驾驶舱
-            if (!PlayerMountTracker.containsCockpit(subLevel, level)) return;
+        // ====== 步骤 3（合并）：单次扫描获取驾驶舱全部信息 ======
+        // 替代原来的 containsCockpit + hasUniqueCockpit + findCockpitBlockInSubLevel 三次独立扫描
+        var cockpitScan = PlayerMountTracker.scanSubLevelForCockpit(subLevel, level);
+
+        // 检查 SubLevel 是否包含驾驶舱
+        if (!cockpitScan.hasCockpit()) {
+            return;
+        }
+
+        BlockPos cockpitWorldPos = cockpitScan.cockpitWorldPos();
+        if (cockpitWorldPos == null) {
+            IACP.LOGGER.warn("[ServerMount] scanSubLevelForCockpit 报告有驾驶舱但位置为 null");
+            return;
         }
 
         // ====== 步骤 3.1：驾驶舱结构完整性检查 ======
-        // 如果射线直接命中了驾驶舱下格，还是检查上格是否存在
-        if (hitState.is(ModBlocks.COCKPIT.get())) {
-            BlockPos above = hitPos.above();
+        BlockState cockpitState = level.getBlockState(cockpitWorldPos);
+        if (cockpitState.is(ModBlocks.COCKPIT.get())) {
+            BlockPos above = cockpitWorldPos.above();
             BlockState aboveState = level.getBlockState(above);
             if (!aboveState.is(ModBlocks.COCKPIT_UPPER.get())) {
                 player.sendSystemMessage(Component.translatable("message.iac_p.cockpit_incomplete"));
                 return;
             }
-        } else if (hitState.is(ModBlocks.SEAT.get())) {
-            // SeatBlock 是单方块结构，无需完整性检查
-        } else {
-            // 射线未直接命中驾驶舱，但 SubLevel 内有驾驶舱
-            // 需要找到驾驶舱位置进行完整性检查
-            BlockPos cockpitPos = findCockpitBlockInSubLevel(subLevel, level);
-            if (cockpitPos == null) {
-                // 这不应该发生，因为 containsCockpit 已通过
-                return;
-            }
-            BlockState cockpitState = level.getBlockState(cockpitPos);
-            if (cockpitState.is(ModBlocks.COCKPIT.get())) {
-                BlockPos above = cockpitPos.above();
-                BlockState aboveState = level.getBlockState(above);
-                if (!aboveState.is(ModBlocks.COCKPIT_UPPER.get())) {
-                    player.sendSystemMessage(Component.translatable("message.iac_p.cockpit_incomplete"));
-                    return;
-                }
-            }
-            // 如果是 SeatBlock，不需要完整性检查
         }
-
-        UUID subLevelUUID = subLevel.getUniqueId();
+        // SeatBlock 是单方块结构，无需完整性检查
 
         // ====== 步骤 3.2（目标1）：检查驾驶舱唯一性 ======
-        if (!PlayerMountTracker.hasUniqueCockpit(subLevel, level)) {
+        // 直接使用 scanSubLevelForCockpit 的结果，无需再次扫描
+        if (!cockpitScan.isUnique()) {
             player.sendSystemMessage(Component.translatable("message.iac_p.multiple_cockpits"));
             return;
         }
@@ -160,13 +146,6 @@ public class ServerMountHandler {
         // ====== 步骤 3.3（目标2）：检查 SubLevel 是否已被其他玩家占用 ======
         if (PlayerMountTracker.isSubLevelOccupiedByOther(subLevelUUID, player)) {
             player.sendSystemMessage(Component.translatable("message.iac_p.sublevel_occupied"));
-            return;
-        }
-
-        // 查找驾驶舱方块的本地位置（用于后续位置同步）
-        BlockPos cockpitWorldPos = findCockpitBlockInSubLevel(subLevel, level);
-        if (cockpitWorldPos == null) {
-            IACP.LOGGER.warn("[ServerMount] 找不到驾驶舱方块位置，无法上车");
             return;
         }
         // 驾驶舱本地位置 = 其在 Plot 中的原始世界位置。取底部中心（y 不变 = 底部）
@@ -211,36 +190,20 @@ public class ServerMountHandler {
     }
 
     /**
-     * 在 SubLevel 中查找驾驶舱核心方块的位置（使用 chunk 迭代，无需 pose 变换）。
-     * 用于目标 4：射线未直接命中驾驶舱时的结构完整性检查。
+     * 在 SubLevel 中查找驾驶舱核心方块的位置。
+     * 使用 {@link SubLevelScanner} 统一遍历。
+     * <p>
+     * 注：mountPlayer() 已改用 {@link PlayerMountTracker#scanSubLevelForCockpit} 单次扫描，
+     * 此方法仅保留供其他外部调用方使用。
      */
     private static BlockPos findCockpitBlockInSubLevel(SubLevel subLevel, ServerLevel level) {
-        LevelPlot plot = subLevel.getPlot();
-        if (plot == null) return null;
-
-        for (PlotChunkHolder chunk : plot.getLoadedChunks()) {
-            BoundingBox3ic localBounds = chunk.getBoundingBox();
-            if (localBounds == null || localBounds == BoundingBox3i.EMPTY) continue;
-
-            int chunkMinX = chunk.getPos().getMinBlockX();
-            int chunkMinZ = chunk.getPos().getMinBlockZ();
-
-            for (int x = localBounds.minX(); x <= localBounds.maxX(); x++) {
-                for (int y = localBounds.minY(); y <= localBounds.maxY(); y++) {
-                    for (int z = localBounds.minZ(); z <= localBounds.maxZ(); z++) {
-                        BlockPos worldPos = new BlockPos(
-                                x + chunkMinX, y, z + chunkMinZ
-                        );
-                        BlockState state = level.getBlockState(worldPos);
-
-                        if (state.is(ModBlocks.COCKPIT.get()) || state.is(ModBlocks.SEAT.get())) {
-                            return worldPos;
-                        }
-                    }
-                }
+        final BlockPos[] result = {null};
+        SubLevelScanner.forEachBlock(subLevel, level, (worldPos, state, be) -> {
+            if (result[0] == null && (state.is(ModBlocks.COCKPIT.get()) || state.is(ModBlocks.SEAT.get()))) {
+                result[0] = worldPos;
             }
-        }
-        return null;
+        });
+        return result[0];
     }
 
     /**
@@ -259,35 +222,19 @@ public class ServerMountHandler {
     /**
      * 直接重置指定 SubLevel 内所有悬挂方块的输入（保留刹车状态）。
      * 用于断线/死亡等无法通过玩家对象找到 SubLevel 的场景。
+     * 使用 {@link SubLevelScanner} 统一遍历。
      */
     public static void resetSuspensionInputsInSubLevel(SubLevel subLevel, ServerLevel level) {
-        LevelPlot plot = subLevel.getPlot();
-        if (plot == null) return;
-
-        for (PlotChunkHolder chunk : plot.getLoadedChunks()) {
-            BoundingBox3ic localBounds = chunk.getBoundingBox();
-            if (localBounds == null || localBounds == BoundingBox3i.EMPTY) continue;
-
-            int chunkMinX = chunk.getPos().getMinBlockX();
-            int chunkMinZ = chunk.getPos().getMinBlockZ();
-
-            for (int x = localBounds.minX(); x <= localBounds.maxX(); x++) {
-                for (int y = localBounds.minY(); y <= localBounds.maxY(); y++) {
-                    for (int z = localBounds.minZ(); z <= localBounds.maxZ(); z++) {
-                        BlockPos worldPos = new BlockPos(x + chunkMinX, y, z + chunkMinZ);
-                        BlockEntity be = level.getBlockEntity(worldPos);
-                        if (be instanceof SuspensionTestBlockEntity suspension) {
-                            // 如果刹车踩着的，保留刹车（手刹效果）
-                            boolean keepBrake = suspension.isBraking();
-                            suspension.resetControlInput(keepBrake);
-                        } else if (be instanceof CockpitBlockEntity cockpit) {
-                            // 驾驶舱发动机回到怠速
-                            cockpit.resetEngineToIdle();
-                        }
-                    }
-                }
+        SubLevelScanner.forEachBlock(subLevel, level, (worldPos, state, be) -> {
+            if (be instanceof SuspensionTestBlockEntity suspension) {
+                // 如果刹车踩着的，保留刹车（手刹效果）
+                boolean keepBrake = suspension.isBraking();
+                suspension.resetControlInput(keepBrake);
+            } else if (be instanceof CockpitBlockEntity cockpit) {
+                // 驾驶舱发动机回到怠速
+                cockpit.resetEngineToIdle();
             }
-        }
+        });
     }
 
     /**
@@ -306,65 +253,316 @@ public class ServerMountHandler {
         }
     }
 
+    /**
+     * 危险方块集合——玩家不应站在这些方块上或旁边。
+     */
+    private static final Set<Block> DANGEROUS_BLOCKS = Set.of(
+            Blocks.LAVA, Blocks.LAVA_CAULDRON,
+            Blocks.FIRE, Blocks.SOUL_FIRE,
+            Blocks.MAGMA_BLOCK,
+            Blocks.CACTUS,
+            Blocks.CAMPFIRE, Blocks.SOUL_CAMPFIRE,
+            Blocks.SWEET_BERRY_BUSH,
+            Blocks.NETHER_PORTAL, Blocks.END_PORTAL, Blocks.END_GATEWAY,
+            Blocks.POWDER_SNOW
+    );
+
     private static void dismountPlayer(ServerPlayer player) {
-        // === 前置步骤：重置所有悬挂方块输入（防止按键残留） ===
-        // 使用 UUID 查找而非 player 位置——下车时玩家可能不在 SubLevel 空间内
         var mountData = PlayerMountTracker.getMountData(player);
-        if (mountData != null) {
-            resetSuspensionInputsByUUID(player.getServer(), mountData.subLevelUUID());
-        } else {
-            IACP.LOGGER.warn("[ServerMount] 下车时 mountData 为 null，走 fallback");
-            resetSuspensionInputs(player); // fallback
+        UUID subLevelUUID = mountData != null ? mountData.subLevelUUID() : null;
+
+        // === 步骤 1：检测手刹状态（在重置输入之前） ===
+        boolean isBraking = false;
+        SubLevel subLevel = null;
+        if (subLevelUUID != null) {
+            subLevel = findSubLevelByUUID(player.getServer(), subLevelUUID);
+            if (subLevel != null) {
+                isBraking = isSubLevelBraking(subLevel, player.serverLevel());
+            }
         }
 
-        // 清除挂载状态（自动清除 SubLevel 占用）
-        PlayerMountTracker.unmount(player);
+        // === 步骤 2：重置悬挂输入 ===
+        if (mountData != null) {
+            resetSuspensionInputsByUUID(player.getServer(), subLevelUUID);
+        } else {
+            IACP.LOGGER.warn("[ServerMount] 下车时 mountData 为 null，走 fallback");
+            resetSuspensionInputs(player);
+        }
 
-        // 恢复玩家
+        // === 步骤 3：清理挂载状态 ===
+        PlayerMountTracker.unmount(player);
         PlayerMountTracker.restorePlayer(player);
 
-        // 下车前刷新 SuspensionBE 缓存（为下次上车做好准备）
         if (mountData != null) {
             SuspensionTestBlockEntity.invalidateCachesInSubLevel(player.serverLevel(), mountData.subLevelUUID());
         }
 
-        // 传送到安全位置
-        Vec3 pos = findSafeDismountPosition(player);
+        // === 步骤 4：选择下车位置 ===
+        Vec3 pos;
+        if (isBraking) {
+            // 手刹下车 → 到附近地面
+            pos = findGroundDismountPosition(player, subLevel, subLevelUUID);
+            IACP.LOGGER.info("[ServerMount] 手刹下车→地面: player={}, pos={}", player.getName().getString(), pos);
+        } else {
+            // 普通 F 下车 → 到载具顶部
+            pos = findVehicleTopDismountPosition(player, subLevel, subLevelUUID);
+            IACP.LOGGER.info("[ServerMount] 普通下车→车顶: player={}, pos={}", player.getName().getString(), pos);
+        }
+
         player.teleportTo(pos.x, pos.y, pos.z);
 
-        // 通知客户端恢复第一人称（UUID/驾驶舱位置传空值，客户端忽略）
+        // === 步骤 5：通知客户端 ===
         ModNetworking.sendToPlayer(player, new MountedStateS2CPacket(false, new UUID(0, 0), 0.0, 0, 0, 0));
-
         IACP.LOGGER.info("[ServerMount] 下车完成: player={}", player.getName().getString());
     }
 
-    private static Vec3 findSafeDismountPosition(ServerPlayer player) {
-        // 玩家实体在上车后未移动，原地就是安全的。
-        // 不再使用 getLookAngle() 计算偏移——上车后鼠标转动会改变视线方向，
-        // 导致"身后2格"指向空中，玩家下车后坠落。
-        Vec3 playerPos = player.position();
-        BlockPos center = BlockPos.containing(playerPos);
+    /**
+     * 通过 UUID 查找 SubLevel。
+     */
+    private static SubLevel findSubLevelByUUID(MinecraftServer server, UUID subLevelUUID) {
+        for (ServerLevel level : server.getAllLevels()) {
+            SubLevelContainer container = SubLevelContainer.getContainer(level);
+            if (container == null) continue;
+            SubLevel sl = container.getSubLevel(subLevelUUID);
+            if (sl != null) return sl;
+        }
+        return null;
+    }
+
+    /**
+     * 检测 SubLevel 内是否有悬挂方块正在刹车。
+     * 在重置输入前调用，用于判断手刹下车还是普通下车。
+     */
+    private static boolean isSubLevelBraking(SubLevel subLevel, ServerLevel level) {
+        boolean[] braking = {false};
+        SubLevelScanner.forEachBlock(subLevel, level, (worldPos, state, be) -> {
+            if (be instanceof SuspensionTestBlockEntity sbe && sbe.isBraking()) {
+                braking[0] = true;
+            }
+        });
+        return braking[0];
+    }
+
+    // ====================================================================
+    //  下车位置算法
+    // ====================================================================
+
+    /**
+     * 手刹下车：找到载具附近的安全地面位置。
+     * <p>
+     * 搜索规则：
+     * <ol>
+     *   <li>以 SubLevel 位姿位置为中心，逐层扩大半径（1~5 格）</li>
+     *   <li>对每个水平位置，向下找到第一个固体方块表面</li>
+     *   <li>检查：脚下方块非危险/传送门，脚部和头部空间为空气</li>
+     *   <li>检查：两格空间内不包含 SubLevel 物理结构的方块</li>
+     *   <li>尽量保持与 SubLevel 相同高度</li>
+     * </ol>
+     */
+    private static Vec3 findGroundDismountPosition(ServerPlayer player, SubLevel subLevel, UUID subLevelUUID) {
         ServerLevel level = player.serverLevel();
 
-        // 直接检查玩家当前位置是否安全（双脚 + 头部在空气中）
-        if (level.getBlockState(center).isAir() &&
-                level.getBlockState(center.above()).isAir()) {
+        // 获取 SubLevel 的世界位置
+        Vector3dc slPos = getSubLevelPosition(subLevel);
+        if (slPos == null) {
+            return fallbackDismountPosition(player, level, subLevel, subLevelUUID);
+        }
+
+        int baseX = (int) Math.floor(slPos.x());
+        int baseZ = (int) Math.floor(slPos.z());
+        int baseY = (int) Math.floor(slPos.y());
+
+        // 收集 SubLevel 内所有方块的位置（用于碰撞检测）
+        Set<BlockPos> subLevelBlocks = collectSubLevelBlockPositions(subLevel, level);
+
+        // 8 方向搜索，逐层扩大半径（1~5 格）
+        int[][] directions = {
+                {0, -1}, {1, -1}, {-1, -1},
+                {1, 0}, {-1, 0},
+                {0, 1}, {1, 1}, {-1, 1}
+        };
+
+        for (int radius = 1; radius <= 5; radius++) {
+            for (int[] dir : directions) {
+                int dx = dir[0] * radius;
+                int dz = dir[1] * radius;
+                BlockPos searchPos = new BlockPos(baseX + dx, baseY, baseZ + dz);
+
+                // 从稍高处（+3）向下找地面
+                for (int dy = 3; dy >= -5; dy--) {
+                    BlockPos footPos = searchPos.offset(0, dy, 0);
+                    BlockPos headPos = footPos.above();
+                    BlockPos groundPos = footPos.below();
+
+                    BlockState groundState = level.getBlockState(groundPos);
+                    BlockState footState = level.getBlockState(footPos);
+                    BlockState headState = level.getBlockState(headPos);
+
+                    // 脚下必须是固体方块
+                    if (groundState.isAir() || !groundState.isSolid()) continue;
+                    // 脚下不能是危险方块或传送门
+                    if (DANGEROUS_BLOCKS.contains(groundState.getBlock())) continue;
+                    // 脚部和头部必须是空气
+                    if (!footState.isAir()) continue;
+                    if (!headState.isAir()) continue;
+                    // 检查两格空间内不包含 SubLevel 物理结构
+                    if (subLevelBlocks.contains(footPos) || subLevelBlocks.contains(headPos)) continue;
+
+                    return Vec3.atBottomCenterOf(footPos);
+                }
+            }
+        }
+
+        // fallback：回到旧方法
+        return fallbackDismountPosition(player, level, subLevel, subLevelUUID);
+    }
+
+    /**
+     * 普通 F 下车：找到载具物理结构顶部位置。
+     * <p>
+     * 规则：
+     * <ol>
+     *   <li>扫描 SubLevel 内所有方块，找到最高 Y</li>
+     *   <li>玩家站在最高 Y + 1 处（脚部），头部在最高 Y + 2</li>
+     *   <li>检查两格都在空气中，无危险方块</li>
+     *   <li>检查两格空间内不包含 SubLevel 物理结构</li>
+     * </ol>
+     */
+    private static Vec3 findVehicleTopDismountPosition(ServerPlayer player, SubLevel subLevel, UUID subLevelUUID) {
+        ServerLevel level = player.serverLevel();
+
+        Vector3dc slPos = getSubLevelPosition(subLevel);
+        if (slPos == null) {
+            return fallbackDismountPosition(player, level, subLevel, subLevelUUID);
+        }
+
+        int baseX = (int) Math.floor(slPos.x());
+        int baseZ = (int) Math.floor(slPos.z());
+
+        // 收集 SubLevel 内所有方块位置，同时找到最高 Y
+        int[] maxY = {Integer.MIN_VALUE};
+        Set<BlockPos> subLevelBlocks = collectSubLevelBlockPositions(subLevel, level);
+        for (BlockPos bp : subLevelBlocks) {
+            if (bp.getY() > maxY[0]) maxY[0] = bp.getY();
+        }
+
+        if (maxY[0] == Integer.MIN_VALUE) {
+            // SubLevel 内没有方块
+            return fallbackDismountPosition(player, level, subLevel, subLevelUUID);
+        }
+
+        int topY = maxY[0];
+        BlockPos footPos = new BlockPos(baseX, topY + 1, baseZ);
+        BlockPos headPos = footPos.above();
+
+        BlockState footState = level.getBlockState(footPos);
+        BlockState headState = level.getBlockState(headPos);
+
+        if (footState.isAir() && headState.isAir()
+                && !subLevelBlocks.contains(footPos) && !subLevelBlocks.contains(headPos)) {
+            return Vec3.atBottomCenterOf(footPos);
+        }
+
+        // 顶部被挡住时，尝试向四周偏移
+        int[][] offsets = {
+                {0, -1}, {1, 0}, {-1, 0}, {0, 1},
+                {1, -1}, {-1, -1}, {1, 1}, {-1, 1}
+        };
+        for (int[] off : offsets) {
+            BlockPos tryFoot = new BlockPos(baseX + off[0], topY + 1, baseZ + off[1]);
+            BlockPos tryHead = tryFoot.above();
+            if (level.getBlockState(tryFoot).isAir() && level.getBlockState(tryHead).isAir()
+                    && !subLevelBlocks.contains(tryFoot) && !subLevelBlocks.contains(tryHead)) {
+                return Vec3.atBottomCenterOf(tryFoot);
+            }
+        }
+
+        // fallback
+        return fallbackDismountPosition(player, level, subLevel, subLevelUUID);
+    }
+
+    /**
+     * 获取 SubLevel 的世界空间位置。
+     */
+    private static Vector3dc getSubLevelPosition(SubLevel subLevel) {
+        if (subLevel == null) return null;
+        var pose = subLevel.logicalPose();
+        if (pose == null) return null;
+        return pose.position();
+    }
+
+    /**
+     * 收集 SubLevel 内所有方块的世界坐标（用于碰撞判断）。
+     */
+    private static Set<BlockPos> collectSubLevelBlockPositions(SubLevel subLevel, ServerLevel level) {
+        Set<BlockPos> positions = new java.util.HashSet<>();
+        if (subLevel == null) return positions;
+
+        SubLevelScanner.forEachBlockState(subLevel, level, (worldPos, state) -> {
+            if (!state.isAir()) {
+                positions.add(worldPos);
+                positions.add(worldPos.above()); // 两格空间都标记
+            }
+        });
+
+        return positions;
+    }
+
+    /**
+     * 回退下车位置：水平搜索 + 竖直搜索安全位置。
+     */
+    private static Vec3 fallbackDismountPosition(ServerPlayer player, ServerLevel level,
+                                                  SubLevel subLevel, UUID subLevelUUID) {
+        Vec3 playerPos = player.position();
+        BlockPos center = BlockPos.containing(playerPos);
+
+        // 直接检查当前位置
+        if (isSafeBlock(level, center) && isSafeBlock(level, center.above())) {
             return playerPos;
         }
 
-        // 水平方向找安全位置
-        for (int dx = -1; dx <= 1; dx++) {
-            for (int dz = -1; dz <= 1; dz++) {
-                if (dx == 0 && dz == 0) continue;
-                BlockPos tryPos = center.offset(dx, 0, dz);
-                if (level.getBlockState(tryPos).isAir() &&
-                        level.getBlockState(tryPos.above()).isAir()) {
+        // 收集 SubLevel 方块
+        Set<BlockPos> subLevelBlocks = (subLevel != null)
+                ? collectSubLevelBlockPositions(subLevel, level)
+                : java.util.Collections.emptySet();
+
+        // 水平 8 方向搜索（半径 1~3）
+        int[][] offsets = {
+                {0, -1}, {1, -1}, {-1, -1},
+                {1, 0}, {-1, 0},
+                {0, 1}, {1, 1}, {-1, 1}
+        };
+        for (int radius = 1; radius <= 3; radius++) {
+            for (int[] off : offsets) {
+                BlockPos tryPos = center.offset(off[0] * radius, 0, off[1] * radius);
+                BlockPos headPos = tryPos.above();
+                if (isSafeBlock(level, tryPos) && isSafeBlock(level, headPos)
+                        && !subLevelBlocks.contains(tryPos) && !subLevelBlocks.contains(headPos)) {
                     return Vec3.atCenterOf(tryPos);
                 }
             }
         }
 
-        // fallback：回到玩家位置
+        // 向上搜索
+        for (int dy = 1; dy <= 5; dy++) {
+            BlockPos tryPos = center.above(dy);
+            BlockPos headPos = tryPos.above();
+            if (isSafeBlock(level, tryPos) && isSafeBlock(level, headPos)) {
+                return Vec3.atCenterOf(tryPos);
+            }
+        }
+
         return playerPos;
+    }
+
+    /**
+     * 检查一个方块位置是否"安全"——即该方块是空气或非实心方块。
+     */
+    private static boolean isSafeBlock(ServerLevel level, BlockPos pos) {
+        BlockState state = level.getBlockState(pos);
+        Block block = state.getBlock();
+        // 不能是危险方块或传送门
+        if (DANGEROUS_BLOCKS.contains(block)) return false;
+        return state.isAir() || !state.isSolid();
     }
 }

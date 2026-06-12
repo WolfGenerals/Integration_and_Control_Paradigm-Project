@@ -16,12 +16,7 @@ import com.hainabaichuan75.iac_p.network.packets.TurretTargetC2SPacket;
 import com.hainabaichuan75.iac_p.network.packets.VehicleControlC2SPacket;
 import com.mojang.blaze3d.platform.InputConstants;
 import dev.ryanhcode.sable.Sable;
-import dev.ryanhcode.sable.companion.math.BoundingBox3ic;
-import dev.ryanhcode.sable.companion.math.BoundingBox3i;
-import dev.ryanhcode.sable.sublevel.ClientSubLevel;
 import dev.ryanhcode.sable.sublevel.SubLevel;
-import dev.ryanhcode.sable.sublevel.plot.LevelPlot;
-import dev.ryanhcode.sable.sublevel.plot.PlotChunkHolder;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
@@ -395,79 +390,63 @@ public class ClientEvents {
     }
 
     /**
-     * 扫描当前 SubLevel 内的所有悬挂测试方块，
-     * 检测每个方块配置的按键是否被按下，打包发送到服务端。
+     * 检测每个悬挂方块配置的按键是否被按下，打包发送到服务端。
      * <p>
+     * 性能优化：使用 {@link ClientMountHandler#getSuspensionPositions()} 缓存的位置列表，
+     * 不再每 2 tick 全量扫描 SubLevel chunks。
      * 仅当有状态变化时才发送，减少网络开销。
      */
     private static void sendVehicleControlInput(Minecraft mc) {
-        ClientSubLevel clientSubLevel = ClientMountHandler.getMountedClientSubLevel();
-        if (clientSubLevel == null) return;
+        List<BlockPos> positions = ClientMountHandler.getSuspensionPositions();
+        if (positions.isEmpty()) {
+            lastControlStates.clear();
+            return;
+        }
 
         long window = mc.getWindow().getWindow();
         List<VehicleControlC2SPacket.Entry> entries = new ArrayList<>();
         boolean hasChanges = false;
 
-        // 扫描 SubLevel 内所有方块，找出悬挂测试方块
-        LevelPlot plot = clientSubLevel.getPlot();
-        if (plot == null) return;
+        for (BlockPos worldPos : positions) {
+            BlockState state = mc.level.getBlockState(worldPos);
+            if (!(state.getBlock() instanceof SuspensionTestBlock)) continue;
 
-        for (PlotChunkHolder chunk : plot.getLoadedChunks()) {
-            BoundingBox3ic localBounds = chunk.getBoundingBox();
-            if (localBounds == null || localBounds == BoundingBox3i.EMPTY) continue;
+            BlockEntity be = mc.level.getBlockEntity(worldPos);
+            if (!(be instanceof SuspensionTestBlockEntity suspension)) continue;
 
-            int chunkMinX = chunk.getPos().getMinBlockX();
-            int chunkMinZ = chunk.getPos().getMinBlockZ();
+            // 检查该方块配置的按键是否被按下
+            // 使用智能映射键（如果设置了），否则回退到手动配置键
+            boolean fwd  = InputConstants.isKeyDown(window, InputConstants.getKey(suspension.getActiveKeyForward()).getValue());
+            boolean bwd  = InputConstants.isKeyDown(window, InputConstants.getKey(suspension.getActiveKeyBackward()).getValue());
+            boolean left = InputConstants.isKeyDown(window, InputConstants.getKey(suspension.getActiveKeyLeft()).getValue());
+            boolean right= InputConstants.isKeyDown(window, InputConstants.getKey(suspension.getActiveKeyRight()).getValue());
+            boolean brake= InputConstants.isKeyDown(window, InputConstants.getKey(suspension.getActiveKeyBrake()).getValue());
 
-            for (int x = localBounds.minX(); x <= localBounds.maxX(); x++) {
-                for (int y = localBounds.minY(); y <= localBounds.maxY(); y++) {
-                    for (int z = localBounds.minZ(); z <= localBounds.maxZ(); z++) {
-                        BlockPos worldPos = new BlockPos(x + chunkMinX, y, z + chunkMinZ);
-                        BlockState state = mc.level.getBlockState(worldPos);
-                        if (!(state.getBlock() instanceof SuspensionTestBlock)) continue;
+            // === 同步控制输入到客户端 BE，以驱动视觉动画 ===
+            // 这样轮子的 activeRpm、targetSteeringYaw、braking 在客户端也被正确设置，
+            // 从而 tick() 中能产生轮子旋转动画和转向动画。
+            suspension.applyControlInput(fwd, bwd, left, right, brake);
 
-                        BlockEntity be = mc.level.getBlockEntity(worldPos);
-                        if (!(be instanceof SuspensionTestBlockEntity suspension)) continue;
+            boolean[] currentState = {fwd, bwd, left, right, brake};
 
-                        // 检查该方块配置的按键是否被按下
-                        // 使用智能映射键（如果设置了），否则回退到手动配置键
-                        boolean fwd  = InputConstants.isKeyDown(window, InputConstants.getKey(suspension.getActiveKeyForward()).getValue());
-                        boolean bwd  = InputConstants.isKeyDown(window, InputConstants.getKey(suspension.getActiveKeyBackward()).getValue());
-                        boolean left = InputConstants.isKeyDown(window, InputConstants.getKey(suspension.getActiveKeyLeft()).getValue());
-                        boolean right= InputConstants.isKeyDown(window, InputConstants.getKey(suspension.getActiveKeyRight()).getValue());
-                        boolean brake= InputConstants.isKeyDown(window, InputConstants.getKey(suspension.getActiveKeyBrake()).getValue());
+            // 检测状态变化
+            boolean[] lastState = lastControlStates.get(worldPos);
+            boolean changed = lastState == null
+                    || lastState[0] != fwd || lastState[1] != bwd
+                    || lastState[2] != left || lastState[3] != right
+                    || lastState[4] != brake;
 
-                        // === 同步控制输入到客户端 BE，以驱动视觉动画 ===
-                        // 这样轮子的 activeRpm、targetSteeringYaw、braking 在客户端也被正确设置，
-                        // 从而 tick() 中能产生轮子旋转动画和转向动画。
-                        suspension.applyControlInput(fwd, bwd, left, right, brake);
-
-                        boolean[] currentState = {fwd, bwd, left, right, brake};
-
-                        // 检测状态变化
-                        boolean[] lastState = lastControlStates.get(worldPos);
-                        boolean changed = lastState == null
-                                || lastState[0] != fwd || lastState[1] != bwd
-                                || lastState[2] != left || lastState[3] != right
-                                || lastState[4] != brake;
-
-                        if (changed) {
-                            hasChanges = true;
-                            lastControlStates.put(worldPos, currentState);
-                        }
-
-                        entries.add(new VehicleControlC2SPacket.Entry(worldPos, fwd, bwd, left, right, brake));
-                    }
-                }
+            if (changed) {
+                hasChanges = true;
+                lastControlStates.put(worldPos, currentState);
             }
+
+            entries.add(new VehicleControlC2SPacket.Entry(worldPos, fwd, bwd, left, right, brake));
         }
 
         // 仅在有关键状态变化时发送，减少网络开销
         if (hasChanges && !entries.isEmpty()) {
             ModNetworking.sendToServer(new VehicleControlC2SPacket(entries));
-        } else if (entries.isEmpty()) {
-            // SubLevel 内没有悬挂方块 → 清除缓存
-            lastControlStates.clear();
         }
     }
 
