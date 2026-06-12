@@ -46,24 +46,24 @@ public class SuspensionTestRenderer implements BlockEntityRenderer<SuspensionTes
         SuperByteBuffer springBot = CachedBuffers.partial(OffroadPartialModels.SPRING_LOWER, state);
         SuperByteBuffer springMid = CachedBuffers.partial(OffroadPartialModels.SPRING_MIDDLE, state);
 
-        // 从 BlockEntity 读取编译时常量（通过静态方法）
-        double wheelPivot = SuspensionTestBlockEntity.wheelPivotZ();
-        double hWPos = SuspensionTestBlockEntity.wheelPosZ();
-        double vWPos = -be.getLerpedExtension(pt) + SuspensionTestBlockEntity.wheelPosY();
-        double wSide = SuspensionTestBlockEntity.wheelPosX();
+        // 从 SuspensionConstants 读取编译时常量
+        double wheelPivot = SuspensionConstants.wheelPivotZ();
+        double hWPos = SuspensionConstants.wheelPosZ();
+        double vWPos = -be.getLerpedExtension(pt) + SuspensionConstants.wheelPosY();
+        double wSide = SuspensionConstants.wheelPosX();
 
-        double tMountH = SuspensionTestBlockEntity.pivotBlockZ();
-        double tMountV = SuspensionTestBlockEntity.pivotBlockY();
-        double tMountS = SuspensionTestBlockEntity.pivotBlockX();
+        double tMountH = SuspensionConstants.pivotBlockZ();
+        double tMountV = SuspensionConstants.pivotBlockY();
+        double tMountS = SuspensionConstants.pivotBlockX();
 
-        double sMountH = SuspensionTestBlockEntity.springBlockZ();
-        double sMountV = SuspensionTestBlockEntity.springBlockY();
-        double sMountS = SuspensionTestBlockEntity.springBlockX();
+        double sMountH = SuspensionConstants.springBlockZ();
+        double sMountV = SuspensionConstants.springBlockY();
+        double sMountS = SuspensionConstants.springBlockX();
 
         // 弹簧轮子侧端点
-        double sWheelH = SuspensionTestBlockEntity.springWheelZ();
-        double sWheelV = SuspensionTestBlockEntity.springWheelY();
-        double sWheelS = SuspensionTestBlockEntity.springWheelX();
+        double sWheelH = SuspensionConstants.springWheelZ();
+        double sWheelV = SuspensionConstants.springWheelY();
+        double sWheelS = SuspensionConstants.springWheelX();
 
         double teleAngle = Math.atan2(vWPos - tMountV, hWPos - wheelPivot - tMountH);
         double teleDist = new Vector2d(vWPos - tMountV, hWPos - wheelPivot - tMountH).length();

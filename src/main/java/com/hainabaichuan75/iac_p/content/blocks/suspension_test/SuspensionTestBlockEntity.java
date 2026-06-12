@@ -1,15 +1,10 @@
 /*
-*这个文件是悬挂测试方块实体类，包含了大量的编译时常量和运行时状态字段，用于控制悬挂系统的物理行为和渲染位置。
-注释中详细解释了每个常量的物理意义和调参效果，以及力学模型的概述。
-该类还实现了 BlockEntitySubLevelActor 接口，与 Sable 物理引擎集成，实现了复杂的悬挂物理模拟。
-结构如下：
-1. 视觉偏移常量：控制弹簧、转向轴、轮轴的渲染位置，修改后重编生效。
-2. 力学参数常量：包括悬挂弹簧参数、驱动参数、轮胎摩擦参数、刹车参数、二次方速度阻尼、转向参数等，修改后重编生效。
-3. 轮胎物理参数：编译时默认值和运行时可编辑的参数，控制轮胎的物理行为。
-4. 常量访问器：供渲染器使用的静态方法，返回上述常量值。
-5. 按键绑定默认值：定义了默认的控制按键。
-6. 运行时状态字段：包括持有的物品、目标转向角、物理状态、力等，以及按键绑定和控制输入的状态。
-*/
+ * 悬挂测试方块实体 —— 悬挂物理、轮胎模型、控制输入、状态管理。
+ *
+ * 编译时常量已提取到 {@link SuspensionConstants}。
+ * 轮胎物理计算已提取到 {@link TirePhysicsCalculator}。
+ * Brush 侧偏模型已提取到 {@link BrushTireModel}。
+ */
 package com.hainabaichuan75.iac_p.content.blocks.suspension_test;
 
 import com.hainabaichuan75.iac_p.IACP;
@@ -54,347 +49,28 @@ import org.joml.Vector3dc;
 
 import java.util.List;
 
-/**
- * 悬挂测试方块实体。
- *
- * <h3>视觉偏移常量（编译时配置）</h3>
- * 以下常量控制弹簧、转向轴、轮轴的渲染位置。
- * 修改后重新编译即可生效，适用于不同轮子类型的适配。
- *
- * <pre>
- * 坐标约定（方块局部坐标系，旋转到 facing 方向后）：
- *   X = 侧向（垂直于 facing 的水平方向）
- *   Y = 垂直（向上为正）
- *   Z = 纵深（沿 facing 方向向外为正）
- * 单位：格（1 格 = 1.0，如 7/16 = 0.4375）
- * </pre>
- *
- * <h3>力学参数常量（编译时配置）</h3>
- * 除视觉偏移外，还包含轮胎摩擦系数、动力参数（RPM/扭矩）、
- * 转向角度范围、转向速率等力学参数。同样通过修改常量后重编生效。
- *
- * @see SuspensionTestRenderer 使用这些常量的渲染器
- */
+import static com.hainabaichuan75.iac_p.content.blocks.suspension_test.SuspensionConstants.*;
 public class SuspensionTestBlockEntity extends SmartBlockEntity implements BlockEntitySubLevelActor {
 
     // ====================================================================
-    //  视觉偏移常量 —— 修改后重编即可生效
+    //  所有编译时常量已提取到 SuspensionConstants.java。
+    //  通过静态导入 `import static ...SuspensionConstants.*` 访问。
+    // ====================================================================
     // ====================================================================
 
-    // ---- 弹簧（两个端点） ----
-    /** 弹簧在方块侧的附着点（X=侧向, Y=垂直, Z=纵深） */
-    private static final double SPRING_BLOCK_X = 7.0 / 16.0;
-    private static final double SPRING_BLOCK_Y = 7.0 / 16.0;
-    private static final double SPRING_BLOCK_Z = 0.0;
-
-    /** 弹簧在轮子侧的附着点（X=侧向, Y=垂直, Z=纵深偏移量） */
-    private static final double SPRING_WHEEL_X = 0.0;
-    private static final double SPRING_WHEEL_Y = -2.0 / 16.0;
-    private static final double SPRING_WHEEL_Z = 12.0 / 16.0;
-
-    // ---- 转向轴/望远镜管（两个端点） ----
-    /** 转向轴在方块侧的支点 */
-    private static final double PIVOT_BLOCK_X = 0.0;
-    private static final double PIVOT_BLOCK_Y = -6.0 / 16.0;
-    private static final double PIVOT_BLOCK_Z = 0.0;
-
-    /** 转向轴在轮子侧的连接点（相对轮轴） */
-    private static final double PIVOT_WHEEL_X = 0.0;
-    private static final double PIVOT_WHEEL_Y = 0.0;
-    private static final double PIVOT_WHEEL_Z = 0.0;
-
-    // ---- 轮轴 ----
-    /** 轮轴支点在方块侧的位置 */
-    private static final double WHEEL_PIVOT_X = 0.0;
-    private static final double WHEEL_PIVOT_Y = 0.0;
-    private static final double WHEEL_PIVOT_Z = 10.0 / 16.0;
-
-    /** 轮子最终渲染位置（相对方块侧） */
-    private static final double WHEEL_POS_X = 0.0;
-    private static final double WHEEL_POS_Y = 0.0;
-    private static final double WHEEL_POS_Z = 22.0 / 16.0;
-
-    // ====================================================================
-    //  力学参数常量 —— 修改后重编即可生效
-    //
-    //  ╔═══════════════════════════════════════════════════════════════╗
-    //  ║  摩擦圆模型 (Friction Circle / Coulomb Friction)            ║
-    //  ║                                                              ║
-    //  ║  每个物理 tick：                                              ║
-    //  ║    1. 悬挂弹簧产生法向冲量 N（支撑载具重量）                    ║
-    //  ║    2. 摩擦预算 F_max = μ × N（纵向+侧向共享预算）               ║
-    //  ║    3. 驱动力+侧向力需求被摩擦圆约束：√(F_long² + F_lat²) ≤ F_max ║
-    //  ║    4. 超出预算时两个分量等比例缩减 = 轮子进入滑移/空转状态     ║
-    //  ╚═══════════════════════════════════════════════════════════════╝
-    // ====================================================================
-
-    // ---- [A] 悬挂弹簧参数 ----
-    //
-    // ═══════════════════════════════════════════════════════════════════
-    //  线性弹簧-阻尼器模型：
-    //    F_spring = springK × 压缩量
-    //    F_damp   = dampingC × 压缩速度（负号引入方向）
-    //    F_total  = F_spring + F_damp  （以冲量形式施加到引擎）
-    //
-    //  摩擦预算只使用 F_spring 的静载分量，排除阻尼瞬态（见 §摩擦圆）。
-    //
-    //  质量自适应：轻车线性缩放保持柔顺，重车封顶防止触底。
-    //  有效刚度(N/m) = min(nm, MASS_THRESHOLD) × STIFFNESS_PER_NM
-    //  有效阻尼(N·s/m) = min(nm, MASS_THRESHOLD) × DAMPING_PER_NM
-    //
-    //  ╔════════════════════════════════════════════════════════════════╗
-    //  ║  调参参考：                                                   ║
-    //  ║  • STIFFNESS_PER_NM  调大 → 所有车辆悬挂更硬                  ║
-    //  ║  • DAMPING_COEFF_PER_NM  调大 → 震荡衰减更快，路感更清晰      ║
-    //  ║  • MASS_THRESHOLD  调大 → 更重的车才锁定刚度上限              ║
-    //  ║                                                               ║
-    //  ║  当前值效果：                                                  ║
-    //  ║    轻车(nm=1)→ springK=400 N/m, dampingC=10 N·s/m（柔软）    ║
-    //  ║    重车(nm≥5)→ springK=2000 N/m, dampingC=50 N·s/m（硬朗）   ║
-    //  ╚════════════════════════════════════════════════════════════════╝
-    /** 弹簧刚度基数（N/m per nm 单位质量）。
-     *  重车（nm ≥ MASS_THRESHOLD）刚度 = THRESHOLD × 此值 = 2000 N/m。
-     *  原等效值 es=5, nms=min(nm/5,1)×10, ss=es×nms×40 → 400×min(nm,5) */
-    private static final double SPRING_STIFFNESS_PER_NM = 400.0;
-
-    /** 阻尼系数基数（N·s/m per nm 单位质量）。
-     *  重车封顶阻尼 = THRESHOLD × 此值 = 50 N·s/m。
-     *  原等效值 ds = es × nms = 10 × min(nm, 5) */
-    private static final double DAMPING_COEFF_PER_NM = 10.0;
-
-    /** 质量自适应悬挂的过渡阈值（nm 单位质量）。
-     *  nm ≥ 此值时刚度/阻尼封顶，nm < 此值时按比例线性缩放。
-     *  原等效值 = SUSPENSION_STRENGTH(=5) */
-    private static final double SUSPENSION_MASS_THRESHOLD = 5.0;
-
-    /** 悬挂最大伸展长度（格）。轮子自然下垂时的最大长度。 */
-    private static final double MAX_EXT = 0.65;
-    /** 无轮子时的悬挂长度（格）。 */
-    private static final double NO_WHEEL_EXT = 0.5;
-
-    // ---- [B] 驱动参数（由座舱动力系统提供） ----
-    //
-    //  ╔══════════════════════════════════════════════════════════════════════╗
-    //  ║  从 v4 开始，DRIVE_RPM/DRIVE_TORQUE 不再使用固定编译时常量。        ║
-    //  ║  悬挂方块从载具驾驶舱 (CockpitBlockEntity) 的动力系统中读取：        ║
-    //  ║    • 目标轮端 RPM  = 发动机RPM / 当前档位齿比                       ║
-    //  ║    • 轮端可用扭矩  = 发动机扭矩 × 齿比 / 轮数（均摊）               ║
-    //  ║                                                                     ║
-    //  ║  若载具无驾驶舱（降级兼容），回退到以下固定值：                      ║
-    //  ╚══════════════════════════════════════════════════════════════════════╝
-    /** 降级回退：主动驱动时的目标 RPM（无驾驶舱时使用）。 */
-    private static final double FALLBACK_DRIVE_RPM = 400.0;
-
-    /** 降级回退：驱动 P 控制器增益倍率（无驾驶舱时使用）。 */
-    private static final double FALLBACK_DRIVE_TORQUE = 80.0;
-
-    // ---- [C] 轮胎与地面摩擦 ----
-    /** 轮胎摩擦系数（0.0 = 光滑打滑，1.0 = 标准抓地，>1.0 = 高附着力）
-     *  最终摩擦力 = TIRE_FRICTION_COEFFICIENT × 地面摩擦系数 × 法向冲量
-     *  典型地面摩擦系数：草/土≈0.6，石头≈0.8，冰≈0.1 */
-    private static final double TIRE_FRICTION_COEFFICIENT = 0.9;
-
-    /** 最小摩擦基数乘数。
-     *  摩擦基数 = max(弹簧静载冲量, nm × dt × MIN_IMPULSE_MULTIPLIER)
-     *  弹簧静载冲量 ≈ nm × g × dt（重量冲量），
-     *  最小值 = nm × dt × MULTIPLIER。
-     *
-     *  物理含义：摩擦预算 = μ × 摩擦基数，决定了摩擦圆能传递的最大水平冲量。
-     *  最大可用加速度（不被 P 控制器限制时）= μ × MULTIPLIER（m/s² 级）。
-     *  参考：
-     *    MULTIPLIER = 30  → 最大 ~27 m/s²（运动型）— 当前值
-     *    MULTIPLIER = 10  → 最大 ~9 m/s²（≈ μ×g，接近物理真实）
-     *
-     *  06-08 从 500 → 30：消除 45g 摩擦预算，可感受抓地边界。
-     *  保持 30 而非继续降低到 10：因为 MIN_IMPULSE 服务于两个目的——
-     *  (a) 离地轮下限（翻车所需）和 (b) 正常行驶时轻车的抓地力基数。
-     *  将 30 降至 10 在无其他补偿的情况下会使正常行驶也「一直飘移」。
-     *  离地轮减载应通过载荷转移实现（loadTransfer < -1.0 → adjustedSpringImpulse→0），
-     *  而非通过降低 MIN_IMPULSE 全局摩擦地板。两者是正交的。
-     *
-     *  ⚠ 摩擦预算不能基于 sf（含阻尼），因为阻尼在回弹行程会抵消弹簧力，
-     *    导致摩擦预算瞬间塌陷、驱动力归零。必须只用弹簧静载分量。 */
-    private static final double MIN_IMPULSE_MULTIPLIER = 30;
-
-    // ---- [D] 刹车参数 ----
-    /** 刹车强度倍数（0.0 = 无刹车，1.0 = 完全利用摩擦预算刹车） */
-    private static final double BRAKE_STRENGTH = 0.5;
-
-    /** 滚动阻力系数（无输入时的自然减速）。
-     *  已迁移到轮胎物理模型，由 crrBase / crrDeformationGain / 胎压联合计算。
-     *  旧常量 ROLLING_RESISTANCE=0.4 已在 06-08 清理。 */
-
-    /**
-     * 侧偏刚度系数（Brush 轮胎模型）。
-     * 决定漂移临界点：值越大，侧偏角达到峰值抓地所需的转角越小。
-     * 物理含义：侧向力在侧偏角 α = π/(2 × K) 弧度时达到峰值。
-     *   K = 10 → 峰值在 ~9°（标准乘用车）
-     *   K = 15 → 峰值在 ~6°（跑车/热熔胎，高初始抓地）
-     *   K = 6  → 峰值在 ~15°（越野胎/雪地胎，宽容度高）
-     *
-     *  06-08 从 10 改为 20：MIN_IMPULSE_MULTIPLIER 从 500 降到 30 后
-     *  法向力基数大幅降低 → 侧偏刚度（= K × μ × N）同步下降。
-     *  提高 K 保持可接受的直线回正能力，同时峰值角从 9° 收窄到 4.5°，
-     *  让漂移临界点更早到来但仍可控。
-     */
-    private static final double CORNERING_STIFFNESS = 20.0;
-
-    /**
-     * 侧滑阻尼系数（仅极低速时使用）。
-     * 当纵向速度接近零时，侧偏角无法定义，改用阻尼防止原地自旋。
-     * 减速比率 = SIDE_SLIP_DAMPING × dt
-     * 6.0 × 0.05 = 0.30 → 每 tick 衰减 30%
-     */
-    private static final double SIDE_SLIP_DAMPING = 6.0;
-
-    // ====================================================================
-    //  二次方速度阻尼（Drag）
-    // ====================================================================
-    //
-    //  模拟高速时与速度平方成正比的自然阻力（真实世界中来自空气阻力）。
-    //  与滚动阻力（线性）配合构成完整的阻力模型：
-    //
-    //     F_total = -v × Crr × m × g  +  -v × |v| × C_drag
-    //                ↑ 滚动阻力（低速主导）  ↑ 二次方阻尼（高速主导）
-    //
-    //  极速收敛条件：引擎出力 = 滚动阻力 + 二次方阻尼
-    //  调大 C_drag → 极速降低，加速感不变（仅影响高速区）。
-    //
-    //  目标极速 120 km/h (33.3 m/s) 标定值：
-    //    C_drag = 0.0009（每轮，70kg 车，5档满油）
-
-    /** 二次方速度阻尼系数（每轮）。F_drag = -v × |v| × C_drag，冲量形式 = F_drag × dt
-     *  06-08 0.0009→0.002→0.003→0.0045：
-     *  配合 crrBase 调整（0.015→0.035, 移除/0.4）重新校准极速到 ~120 km/h */
-    private static final double DRAG_COEFFICIENT = 0.0045;
-
-    // ---- [E] 转向参数 ----
-    /** 最大转向角（度）。左正右负，范围 0~180。
-     *  例如 30.0 表示左右各可转 30° */
-    private static final double MAX_STEERING_ANGLE = 30.0;
-
-    /** 转向速率（度/tick）。转向时以匀速向目标转向角转动。
-     *  例如 1.5 表示每秒约转 30°（20 tick × 1.5°/tick） */
-    private static final double STEERING_SPEED = 10;
-
-    /** 是否自动归正。true = 无转向输入时自动回中；false = 保持在当前角度 */
-    private static final boolean AUTO_CENTER = true;
-
-    // ---- [E2] 差速器参数 ----
-    /**
-     * 差速器滚动半径比。控制转弯时内外轮 RPM 差异幅度。
-     *
-     *  公式：diffOffset = chasingYaw × (localPosX/HALF_TRACK) × 此值
-     *  物理含义：
-     *    • 30° 转向、轮距 1 格：diffOffset ≈ 0.524 × 1.0 × 0.3 ≈ ±16%
-     *    • 15° 转向、轮距 0.5 格：diffOffset ≈ 0.262 × 0.5 × 0.3 ≈ ±4%
-     *
-     *  调大 → 转弯更灵活（减小转向阻力），但内侧轮打滑风险增加
-     *  调小 → 更像锁止差速器（越野好，转弯阻力大）
-     *  设为 0 → 完全锁止差速器（旧行为）
-     */
-
-    //人工修改：曾经为0.3，现在改为0.37以增加转弯时的内外轮速差，提升转弯性能和响应性。
-    private static final double DIFFERENTIAL_RATIO = 0.37;
+    // ---- 力学参数、转向参数、差速器参数等全部在 SuspensionConstants 中 ----
 
    
 
     // ====================================================================
-    //  轮胎物理参数 —— 运行时配置，NBT 持久化，C 键菜单编辑
+    //  轮胎物理参数 —— 编译时常量见 SuspensionConstants，运行时仅胎压
     // ====================================================================
-    //
-    //  ╔══════════════════════════════════════════════════════════════════════╗
-    //  ║  物理模型概述：                                                    ║
-    //  ║                                                                    ║
-    //  ║  1. 负重 → 胎体形变 → 有效半径减小 → 接触面积增大                  ║
-    //  ║     接触面积 = f(垂直负载, 胎压, 胎体刚度, 胎面宽度)               ║
-    //  ║     抓地力 = μ × 胎压 × 接触面积（最终等价于 μ × 法向冲量）        ║
-    //  ║                                                                    ║
-    //  ║  2. 胎压受负载影响：P_eff = P_nominal + k × (F_normal / A_contact) ║
-    //  ║    负重增大 → 形变增大 → 胎内压力上升 → 爆胎风险增大               ║
-    //  ║                                                                    ║
-    //  ║  3. 滚动阻力来自形变滞后：                                        ║
-    //  ║    胎压越足 → 形变越小 → 滚动阻力越小 → 发动机负担减轻             ║
-    //  ║    负重越大 → 形变越大 → 滚动阻力越大 → 发动机负担增加             ║
-    //  ║                                                                    ║
-    //  ║  4. 爆胎条件：有效胎压 × 大气衰减因子 > 最大安全胎压               ║
-    //  ║    大气压随海拔升高而降低 → 高海拔更容易爆胎                       ║
-    //  ║    胎压越足 → 爆胎风险越高（颠簸中更容易超过极限）                 ║
-    //  ╚══════════════════════════════════════════════════════════════════════╝
-
-    // ---- 编译时默认值（真实 SI 单位，典型乘用车轮胎） ----
-    /** 胎面宽度（米）。典型值：0.20~0.35 m */
-    private static final double DEFAULT_TREAD_WIDTH = 0.25;
-    /** 胎体刚度（N/m）。侧壁抵抗形变的能力 */
-    private static final double DEFAULT_CARCASS_STIFFNESS = 200000.0;
-    /** 最大安全胎压（Pa）。超过此值爆胎 ≈ 3.5 bar */
-    private static final double DEFAULT_MAX_PRESSURE = 350000.0;
-    /** 标称胎压（Pa）。空载推荐充气压力 ≈ 2.2 bar */
-    private static final double DEFAULT_NOMINAL_PRESSURE = 220000.0;
-    /** 胎内容积（m³）。约 50 升 */
-    private static final double DEFAULT_TIRE_VOLUME = 0.05;
-    /** 基础滚动阻力系数（无量纲）。来自轴承摩擦、胎面滞后的基础值。
-     *  06-08 从 0.015 改为 0.035：移除了 `/0.4` 向后兼容系数后，
-     *  提高 crrBase 保持滚动阻力总量与之前大致相同。
-     *  新公式：F_rr = v × Crr_effective × m（无 `/0.4` 放大）
-     *  旧公式：F_rr = v × Crr_effective × m / 0.4 */
-    private static final double DEFAULT_CRR_BASE = 0.035;
-    /** 形变附加滚动阻力系数（无量纲）。形变越大滚动阻力越大的增益系数 */
-    private static final double DEFAULT_CRR_DEFORMATION_GAIN = 0.08;
 
     // ---- 运行时轮胎参数（NBT 持久化，C 键菜单可编辑） ----
     // 胎压（打多少气）是玩家唯一可调的运行时参数。
-    // 其余轮胎物理属性由轮胎款式决定（见 DEFAULT_* 编译时常量），
-    // 未来将随 TireType 注册表扩展为每种轮胎的预设值。
     private double nominalPressure = DEFAULT_NOMINAL_PRESSURE;
 
-    // ====================================================================
-    //  常量访问器（供渲染器使用）
-    // ====================================================================
-
-    // 弹簧
-    public static double springBlockX() { return SPRING_BLOCK_X; }
-    public static double springBlockY() { return SPRING_BLOCK_Y; }
-    public static double springBlockZ() { return SPRING_BLOCK_Z; }
-    public static double springWheelX() { return SPRING_WHEEL_X; }
-    public static double springWheelY() { return SPRING_WHEEL_Y; }
-    public static double springWheelZ() { return SPRING_WHEEL_Z; }
-
-    // 转向轴
-    public static double pivotBlockX() { return PIVOT_BLOCK_X; }
-    public static double pivotBlockY() { return PIVOT_BLOCK_Y; }
-    public static double pivotBlockZ() { return PIVOT_BLOCK_Z; }
-    public static double pivotWheelX() { return PIVOT_WHEEL_X; }
-    public static double pivotWheelY() { return PIVOT_WHEEL_Y; }
-    public static double pivotWheelZ() { return PIVOT_WHEEL_Z; }
-
-    // 轮轴
-    public static double wheelPivotX() { return WHEEL_PIVOT_X; }
-    public static double wheelPivotY() { return WHEEL_PIVOT_Y; }
-    public static double wheelPivotZ() { return WHEEL_PIVOT_Z; }
-    public static double wheelPosX()   { return WHEEL_POS_X; }
-    public static double wheelPosY()   { return WHEEL_POS_Y; }
-    public static double wheelPosZ()   { return WHEEL_POS_Z; }
-
-    // ---- 力学参数访问器（供渲染器/外部使用） ----
-    /** @return 轮胎摩擦系数 */
-    public static double tireFrictionCoefficient() { return TIRE_FRICTION_COEFFICIENT; }
-    /** @return 最大转向角（度） */
-    public static double maxSteeringAngle() { return MAX_STEERING_ANGLE; }
-    /** @return 转向速率（度/tick） */
-    public static double steeringSpeed() { return STEERING_SPEED; }
-    /** @return 是否启用自动归正 */
-    public static boolean autoCenter() { return AUTO_CENTER; }
-
-    // ====================================================================
-    //  按键绑定默认值
-    // ====================================================================
-
-    public static final String DEFAULT_KEY_FORWARD   = "key.keyboard.w";
-    public static final String DEFAULT_KEY_BACKWARD  = "key.keyboard.s";
-    public static final String DEFAULT_KEY_LEFT      = "key.keyboard.a";
-    public static final String DEFAULT_KEY_RIGHT     = "key.keyboard.d";
-    public static final String DEFAULT_KEY_BRAKE     = "key.keyboard.space";
+    // 渲染器访问器：常量访问方法已移至 SuspensionConstants
 
     // ====================================================================
     //  运行时状态字段
@@ -420,11 +96,11 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
     private final ForceTotal forceTotal = new ForceTotal();
 
     // ===== 载具按键绑定（每个方块独立配置，持久化到 NBT） =====
-    private String keyForward   = DEFAULT_KEY_FORWARD;
-    private String keyBackward  = DEFAULT_KEY_BACKWARD;
-    private String keyLeft      = DEFAULT_KEY_LEFT;
-    private String keyRight     = DEFAULT_KEY_RIGHT;
-    private String keyBrake     = DEFAULT_KEY_BRAKE;
+    private String keyForward   = SuspensionConstants.DEFAULT_KEY_FORWARD;
+    private String keyBackward  = SuspensionConstants.DEFAULT_KEY_BACKWARD;
+    private String keyLeft      = SuspensionConstants.DEFAULT_KEY_LEFT;
+    private String keyRight     = SuspensionConstants.DEFAULT_KEY_RIGHT;
+    private String keyBrake     = SuspensionConstants.DEFAULT_KEY_BRAKE;
 
     // ===== 智能映射按键（WASD 智能映射系统分配，不与手动按键冲突） =====
     // 当 smartKey* 非空时优先使用，否则回退到手动 key*
@@ -547,24 +223,7 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
     /** 是否有上一 tick 的速度数据 */
     private boolean hasPrevVelocity = false;
 
-    // ---- 载荷转移参数 ----
-    /**
-     * 载荷转移灵敏度：每 g 加速度转移的载荷比例。
-     * 0.3 意味着 0.5g 加速时转移 15% 的静载从前轴到后轴。
-     * 调大 → 加速/刹车/转弯时抓地力变化更明显。 */
-    private static final double LOAD_TRANSFER_SENSITIVITY = 0.3;
-    /**
-     * 估算重心高度（格）。用于载荷转移幅度计算。
-     * 载具引擎/驾驶舱一般在 y+0.5~1.0 格处。 */
-    private static final double COG_HEIGHT = 0.8;
-    /**
-     * 估算半轴距（格）。用于将轮位归一化到 [-1, 1]。
-     * 实际值由 SubLevel 中悬挂方块的分布决定，这里用默认值
-     * 作为特征长度参考。 */
-    private static final double HALF_WHEELBASE = 1.5;
-    /**
-     * 估算半轮距（格）。同上。 */
-    private static final double HALF_TRACK = 1.0;
+    // ---- 载荷转移参数（见 SuspensionConstants） ----
 
     // ====================================================================
     //  轮胎参数访问器（供配置屏幕和外部使用）
@@ -1129,143 +788,35 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
                     this.pControllerDemand = 0.0;
                 }
 
-                // 4c. 滚动阻力（轮胎物理模型）
-                //
-                // ╔══════════════════════════════════════════════════════════════╗
-                // ║  轮胎物理滚动阻力模型：                                    ║
-                // ║                                                           ║
-                // ║  Crr = Crr_base                                          ║
-                // ║       + Crr_deformation × (δ_tire / radius)              ║
-                // ║       + 0.06 × max(0, P_nominal/P_eff - 1)²              ║
-                // ║                                                           ║
-                // ║  其中 δ_tire = 轮胎形变量 = F_normal / (P_eff × t_width) ║
-                // ║                                                           ║
-                // ║  • 负重越大 → 形变越大 → Crr 越大 → 发动机负担增加 ✅    ║
-                // ║  • 胎压越高 → 形变越小 → Crr 越小 → 发动机负担减轻 ✅    ║
-                // ║  • 亏气严重 → (P_nominal/P_eff - 1)² 暴增 → 阻力暴增 ✅ ║
-                // ╚══════════════════════════════════════════════════════════════╝
-                //
-                // 计算轮胎形变和负载附加胎压
+                // 4c. 滚动阻力（轮胎物理模型 —— 委托 TirePhysicsCalculator）
                 double normalForce = springImpulse / dt; // 法向力 (N)
                 if (tire != null && normalForce > 0) {
-                    // 轮胎形变：法向力 / (胎压 × 胎面宽度)
-                    // 胎压越高越难压扁，胎面越宽压力分布越均匀
-                    tireDeflection = normalForce / (nominalPressure * DEFAULT_TREAD_WIDTH);
-                    // 钳制形变不超过轮胎半径的 30%（物理合理范围）
-                    tireDeflection = Mth.clamp(tireDeflection, 0, rad * 0.3);
-
-                    // 负载引起的胎压升高：形变挤占内部容积
-                    // ΔP = k × F_normal / A_contact（简化模型）
-                    double contactLength = 2 * Math.sqrt(rad * rad - (rad - tireDeflection) * (rad - tireDeflection));
-                    double contactArea = contactLength * DEFAULT_TREAD_WIDTH;
-                    if (contactArea > 1e-10) {
-                        double loadPressureGain = normalForce / contactArea * 0.15; // 15% 压力传递到胎压
-                        effectivePressure = nominalPressure + loadPressureGain;
-                    }
+                    var deflectionResult = TirePhysicsCalculator.calculateTireDeflection(
+                            normalForce, nominalPressure, DEFAULT_TREAD_WIDTH, rad);
+                    tireDeflection = deflectionResult.tireDeflection();
+                    effectivePressure = deflectionResult.effectivePressure();
                 }
 
-                // 计算形变比和胎压比
-                double deformationRatio = tireDeflection / Math.max(rad, 0.01);
-                double pressureRatio = nominalPressure / Math.max(effectivePressure, 1.0);
-                // 亏气附加阻力：当有效胎压低于标称胎压时急剧增加
-                double underInflationPenalty = 0.06 * Math.max(0, pressureRatio - 1.0) * pressureRatio;
+                var rrResult = TirePhysicsCalculator.calculateRollingResistance(
+                        forwardSpeed, nm, dt,
+                        tireDeflection, rad,
+                        nominalPressure, effectivePressure,
+                        DEFAULT_CRR_BASE, DEFAULT_CRR_DEFORMATION_GAIN);
+                longForce += rrResult.rrForce();
+                this.rollingResistanceMag = Math.abs(rrResult.rrForce());
 
-                // 综合滚动阻力系数
-                double crrEffective = DEFAULT_CRR_BASE
-                        + DEFAULT_CRR_DEFORMATION_GAIN * deformationRatio
-                        + underInflationPenalty;
-
-                // 滚动阻力 = -v × Crr_effective × m × dt（阻尼形式）
-                // 06-08: 移除了 `/0.4` 向后兼容系数。crrBase 已从 0.015 调整为 0.035，
-                // 滚动阻力总量与移除前基本一致，但公式含义更清晰。
-                double rrForce = -forwardSpeed * crrEffective * nm * dt;
-                longForce += rrForce;
-                // 记录滚动阻力幅值，供引擎负载计算
-                this.rollingResistanceMag = Math.abs(rrForce);
-
-                // 4d. 二次方速度阻尼（速度平方阻力）
-                //
-                // ╔══════════════════════════════════════════════════════════════╗
-                // ║  F_drag = -v × |v| × C_drag                               ║
-                // ║                                                             ║
-                // ║  物理作用：                                                ║
-                // ║  • 低速时 ≈ 0（滚动阻力主导）                              ║
-                // ║  • 高速时急剧增长，自然限制极速                            ║
-                // ║  • 加速曲线平滑收敛到渐近线                                ║
-                // ║                                                             ║
-                // ║  与滚动阻力的关键区别：                                    ║
-                // ║  滚动阻力 ∝ v（线性）→ 太弱，无法限制极速                 ║
-                // ║  二次方阻力 ∝ v² → 随速度急剧上升，自然收敛               ║
-                // ║                                                             ║
-                // ║  ⚠ 这是外部环境力，叠加到 longForce 但不影响               ║
-                // ║     engine load 计算——P控制器会自然增加输出               ║
-                // ║     来补偿，负载因子自动反映总需求。                      ║
-                // ╚══════════════════════════════════════════════════════════════╝
-                double dragImpulse = -forwardSpeed * Math.abs(forwardSpeed) * DRAG_COEFFICIENT * dt;
+                // 4d. 二次方速度阻尼（委托 TirePhysicsCalculator）
+                double dragImpulse = TirePhysicsCalculator.calculateDragImpulse(
+                        forwardSpeed, DRAG_COEFFICIENT, dt);
                 longForce += dragImpulse;
 
-                // 5. 侧向力（Brush 轮胎侧偏模型）
-                //
-                // ╔══════════════════════════════════════════════════════════════╗
-                // ║  替换了旧的纯阻尼模型：Fy = -Vy × 阻尼 × m × dt                   ║
-                // ║  旧模型永远增大侧向力跟随速度 → 无法模拟失控临界点                    ║
-                // ║                                                              ║
-                // ║  Brush 轮胎模型（刷子模型）：                                    ║
-                // ║    α = atan2(Vy, |Vx|)  ─ 侧偏角                              ║
-                // ║    Fy = -μ × N × sin(K × Cα × tan|α| / (μ × N)) × sgn(α)     ║
-                // ║                                                              ║
-                // ║  物理行为：                                                    ║
-                // ║  • α → 0°：线性区，Fy = -Cα × α（方向感清晰）                     ║
-                // ║  • α ≈ 9°：峰值抓地（对 CORNERING_STIFFNESS=10）                ║
-                // ║  • α > 峰值：力下降 → 轮胎突破极限 → 甩尾/漂移 🔥                  ║
-                // ║  • + 载荷转移联动：加速时后轮增载 → 后轮峰值更高 →                  ║
-                // ║    后轮抓地 > 前轮 → 转向不足（推头）✅                           ║
-                // ║                                                              ║
-                // ║  ⚠ 防抖措施：                                                  ║
-                // ║  • 侧偏角钳制 ±45° → 防止 tan(α) 爆炸                            ║
-                // ║  • 纵向速度 < 1.0 m/s → 纯阻尼（防自旋）                          ║
-                // ║  • 1.0~2.0 m/s → Brush 与阻尼线性混合（平滑过渡）                 ║
-                // ╚══════════════════════════════════════════════════════════════╝
-                double forwardSpeedAbs = Math.abs(forwardSpeed);
-                double totalSpeed = Math.sqrt(forwardSpeed * forwardSpeed + lateralSpeed * lateralSpeed);
-                if (totalSpeed > 1.0) {
-                    // ═══ Brush 轮胎模型 ═══
-                    double slipAngle = Math.atan2(lateralSpeed, forwardSpeedAbs);
-                    // 钳制侧偏角 ±45°，防止 tan(α) 爆炸导致力震荡
-                    slipAngle = Mth.clamp(slipAngle, Math.toRadians(-45.0), Math.toRadians(45.0));
-                    double absSlip = Math.abs(slipAngle);
-
-                    // 法向力 (N) = 摩擦基数 / dt（含载荷转移的调整值）
-                    double latNormalForce = frictionBasis / dt;
-                    // 侧偏刚度：Cα = CORNERING_STIFFNESS × μ × N
-                    double peakForce = mu * latNormalForce; // 侧向峰值力 (N)
-                    double corneringStiffness = CORNERING_STIFFNESS * peakForce;
-
-                    // Brush 模型输入：t = Cα × tan(α) / (μ × N)
-                    double input = corneringStiffness * Math.tan(absSlip) / Math.max(peakForce, 1.0);
-                    input = Mth.clamp(input, 0.0, Math.PI * 0.85); // 限制到略超 π/2 保留后峰值区
-
-                    double fyRatio;
-                    if (input <= Math.PI / 2.0) {
-                        fyRatio = Math.sin(input);             // 峰值前：经典 Brush
-                    } else {
-                        // 峰值后：线性下降模拟抓地崩溃
-                        fyRatio = 1.0 - (input - Math.PI / 2.0) * 0.25;
-                        fyRatio = Math.max(fyRatio, 0.1);       // 残余抓地 ≥ 10%（原25%，降低以减少低速抖动）
-                    }
-
-                    double fyNewtons = peakForce * fyRatio;
-                    // 转换为冲量（与 longForce、frictionBudget 同单位）
-                    double brushImpulse = -Math.signum(slipAngle) * fyNewtons * dt;
-
-                    // 平滑过渡：当 totalSpeed 在 1.0~2.0 m/s 时 Brush 与阻尼混合
-                    double dampingImpulse = -lateralSpeed * SIDE_SLIP_DAMPING * nm * dt;
-                    double blend = Mth.clamp((totalSpeed - 1.0) / 1.0, 0.0, 1.0);
-                    latForce = Mth.lerp(1.0 - blend, dampingImpulse, brushImpulse);
-                } else {
-                    // 低速：纯阻尼 → 防止原地自旋和微小扰动放大
-                    latForce = -lateralSpeed * SIDE_SLIP_DAMPING * nm * dt;
-                }
+                // 5. 侧向力（Brush 轮胎侧偏模型 —— 委托 BrushTireModel）
+                var brushResult = BrushTireModel.calculateLateralForce(
+                        forwardSpeed, lateralSpeed,
+                        frictionBasis, mu,
+                        CORNERING_STIFFNESS, SIDE_SLIP_DAMPING,
+                        nm, dt);
+                latForce = brushResult.lateralImpulse();
             }
 
             // 6. 摩擦圆约束：√(long² + lat²) ≤ μ × N_spring
@@ -1309,46 +860,24 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
             forceVec.fma(longForce, fwdD);
             forceVec.fma(latForce, sideD);
 
-            // 8. 爆胎检测
-            //
-            // ╔══════════════════════════════════════════════════════════════════╗
-            // ║  爆胎条件：                                                    ║
-            // ║    effectivePressure × atmFactor > maxPressure                ║
-            // ║                                                               ║
-            // ║  其中 atmFactor = P_atm / P_seaLevel                          ║
-            // ║  大气压随海拔升高而指数衰减：                                 ║
-            // ║    P_atm = 101325 × exp(-(y - 63) / 8400)                    ║
-            // ║                                                               ║
-            // ║  物理直觉：                                                   ║
-            // ║  • 胎压越足 → 越容易在颠簸中达到极限 → 爆胎 ✅               ║
-            // ║  • 负重越大 → 胎压升高 → 爆胎风险增大 ✅                     ║
-            // ║  • 海拔越高 → 大气压越低 → 爆胎更容易 ✅                     ║
-            // ║  • 胎体刚度越大 → maxPressure 越高 → 耐艹 ✅                ║
-            // ╚══════════════════════════════════════════════════════════════════╝
+            // 8. 爆胎检测（委托 TirePhysicsCalculator）
             if (tire != null && !heldItem.isEmpty()) {
-                // 海拔气压：海平面 y=63，标高 8400m
                 double altitude = bp.getY() - 63.0;
-                double atmPressure = 101325.0 * Math.exp(-altitude / 8400.0);
-                double atmFactor = atmPressure / 101325.0;
-
-                // 爆胎阈值 = 最大安全胎压 + 大气压的辅助支撑
-                double burstThreshold = DEFAULT_MAX_PRESSURE * (0.7 + 0.3 * atmFactor);
-
-                if (effectivePressure > burstThreshold) {
-                    // 爆胎！清空轮子，触发服务端同步
+                var burstResult = TirePhysicsCalculator.checkBurst(
+                        effectivePressure, DEFAULT_MAX_PRESSURE, altitude);
+                if (burstResult.burst()) {
                     this.heldItem = ItemStack.EMPTY;
                     setChanged();
                     sendData();
                     IACP.LOGGER.info("[TireBurst] 轮胎爆裂 at {} (P_eff={}, 阈值={}, 海拔={})",
                             bp, String.format("%.0f", effectivePressure),
-                            String.format("%.0f", burstThreshold), String.format("%.0f", altitude));
+                            String.format("%.0f", burstResult.burstThreshold()),
+                            String.format("%.0f", altitude));
                 }
             }
 
             // 从当前物理速度推算本轮实际轮端 RPM（供发动机-轮速耦合）
-            // forwardSpeed 为局部坐标系纵向速度 (m/s)
-            // wheelRpm = forwardSpeed × 60 / (2π × radius)
-            this.currentWheelRpm = forwardSpeed * 60.0 / (2.0 * Math.PI * Math.max(rad, 0.01));
+            this.currentWheelRpm = TirePhysicsCalculator.calculateWheelRpm(forwardSpeed, rad);
         }
 
         this.forceTotal.applyImpulseAtPoint(sl, this.forcePos, this.forceVec);

@@ -1,6 +1,7 @@
 package com.hainabaichuan75.iac_p.client;
 
 import com.hainabaichuan75.iac_p.content.blocks.cockpit.CockpitBlockEntity;
+import com.hainabaichuan75.iac_p.content.blocks.cockpit.PowertrainConstants;
 import com.hainabaichuan75.iac_p.content.blocks.suspension_test.SuspensionTestBlock;
 import com.hainabaichuan75.iac_p.content.blocks.suspension_test.SuspensionTestBlockEntity;
 
@@ -44,7 +45,7 @@ public class VehicleDebugOverlay {
     // ===== 缓存数据 =====
     private static double engineRpm = 0;
     /** 质量自适应有效扭矩，由 CockpitBE 同步到客户端 */
-    private static double engineTorque = CockpitBlockEntity.ENGINE_TORQUE;
+    private static double engineTorque = PowertrainConstants.ENGINE_TORQUE;
     private static int gear = 0;
     private static double gearboxRpm = 0;
     private static double gearboxTorque = 0;
