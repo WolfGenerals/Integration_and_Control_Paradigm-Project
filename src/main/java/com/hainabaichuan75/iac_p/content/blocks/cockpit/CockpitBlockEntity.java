@@ -235,6 +235,12 @@ public class CockpitBlockEntity extends SmartBlockEntity {
      */
     private boolean smartMappingActive = false;
 
+    /**
+     * WASD 智能映射方向是否已反转。
+     * 为 true 时引擎层反转方向解读，使按键交换后的驾驶行为与交换前一致。
+     */
+    private boolean smartMappingReversed = false;
+
     // ====================================================================
     //  构造
     // ====================================================================
@@ -305,10 +311,20 @@ public class CockpitBlockEntity extends SmartBlockEntity {
             // 油门踩下：指令转速 = 油门位置对应的期望转速
             double commandedRpm = ENGINE_IDLE_RPM
                     + (ENGINE_MAX_RPM - ENGINE_IDLE_RPM) * this.throttleLevel;
-            wheelRpm = (commandedRpm / effectiveRatio) * Math.signum(ratio);
+            double ratioSign = Math.signum(ratio);
+            // 智能映射反转时：反转齿比符号，使车轮朝相反方向旋转
+            if (smartMappingActive && smartMappingReversed) {
+                ratioSign = -ratioSign;
+            }
+            wheelRpm = (commandedRpm / effectiveRatio) * ratioSign;
         } else {
             // 松油：实际发动机转速（跟随耦合，≈ 轮速 × 齿比 × 主减速比）
-            wheelRpm = (engineRpm / effectiveRatio) * Math.signum(ratio);
+            double ratioSign = Math.signum(ratio);
+            // 智能映射反转时：反转齿比符号，使车轮朝相反方向旋转
+            if (smartMappingActive && smartMappingReversed) {
+                ratioSign = -ratioSign;
+            }
+            wheelRpm = (engineRpm / effectiveRatio) * ratioSign;
         }
 
         // 差速分配：各轮同转速，均摊扭矩
@@ -423,6 +439,13 @@ public class CockpitBlockEntity extends SmartBlockEntity {
         sendData();
     }
 
+    public boolean isSmartMappingReversed() { return smartMappingReversed; }
+    public void setSmartMappingReversed(boolean reversed) {
+        this.smartMappingReversed = reversed;
+        setChanged();
+        sendData();
+    }
+
     /** @return 当前档位的人类可读名称 */
     public String getGearDisplayName() {
         return gearName(this.currentGear);
@@ -507,6 +530,11 @@ public class CockpitBlockEntity extends SmartBlockEntity {
             // ═══════════════════════════════════════════════════════════════
             SubLevelScanResult scan = scanSubLevel(sl);
             int direction = scan.throttleDirection;
+
+            // 智能映射反转时：反转方向解读，使按键交换后的驾驶行为与交换前一致
+            if (smartMappingActive && smartMappingReversed) {
+                direction = -direction;
+            }
 
             // ── 油门调整（三段式：加速 / 主动减速 / 自动滑行衰减）──
             if (direction > 0) {
@@ -716,6 +744,7 @@ public class CockpitBlockEntity extends SmartBlockEntity {
     private static final String TAG_THROTTLE_LEVEL = "ThrottleLevel";
     private static final String TAG_EFFECTIVE_TORQUE = "EffectiveTorque";
     private static final String TAG_SMART_MAPPING = "SmartMappingActive";
+    private static final String TAG_SMART_MAPPING_REVERSED = "SmartMappingReversed";
 
     @Override
     protected void write(CompoundTag tag, HolderLookup.Provider registries, boolean clientPacket) {
@@ -725,6 +754,7 @@ public class CockpitBlockEntity extends SmartBlockEntity {
         tag.putDouble(TAG_THROTTLE_LEVEL, this.throttleLevel);
         tag.putDouble(TAG_EFFECTIVE_TORQUE, this.effectiveTorque);
         tag.putBoolean(TAG_SMART_MAPPING, this.smartMappingActive);
+        tag.putBoolean(TAG_SMART_MAPPING_REVERSED, this.smartMappingReversed);
     }
 
     @Override
@@ -735,6 +765,7 @@ public class CockpitBlockEntity extends SmartBlockEntity {
         if (tag.contains(TAG_THROTTLE_LEVEL)) this.throttleLevel = tag.getDouble(TAG_THROTTLE_LEVEL);
         if (tag.contains(TAG_EFFECTIVE_TORQUE)) this.effectiveTorque = tag.getDouble(TAG_EFFECTIVE_TORQUE);
         if (tag.contains(TAG_SMART_MAPPING)) this.smartMappingActive = tag.getBoolean(TAG_SMART_MAPPING);
+        if (tag.contains(TAG_SMART_MAPPING_REVERSED)) this.smartMappingReversed = tag.getBoolean(TAG_SMART_MAPPING_REVERSED);
     }
 
     @Override
