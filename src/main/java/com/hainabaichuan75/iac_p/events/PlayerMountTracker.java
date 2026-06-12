@@ -6,11 +6,7 @@ import com.hainabaichuan75.iac_p.index.ModBlocks;
 import com.hainabaichuan75.iac_p.network.ModNetworking;
 import com.hainabaichuan75.iac_p.network.packets.MountedStateS2CPacket;
 import dev.ryanhcode.sable.api.sublevel.SubLevelContainer;
-import dev.ryanhcode.sable.companion.math.BoundingBox3ic;
-import dev.ryanhcode.sable.companion.math.BoundingBox3i;
 import dev.ryanhcode.sable.sublevel.SubLevel;
-import dev.ryanhcode.sable.sublevel.plot.LevelPlot;
-import dev.ryanhcode.sable.sublevel.plot.PlotChunkHolder;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
@@ -22,10 +18,12 @@ import net.minecraft.world.phys.Vec3;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.event.entity.EntityJoinLevelEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerInteractEvent;
+import net.neoforged.neoforge.event.server.ServerStartingEvent;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
 import org.joml.Vector3d;
 import org.joml.Vector3dc;
 
+import javax.annotation.Nullable;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -46,6 +44,25 @@ public class PlayerMountTracker {
             UUID subLevelUUID,
             double cockpitLocalX, double cockpitLocalY, double cockpitLocalZ,
             double lastPoseX, double lastPoseZ
+    ) {}
+
+    /**
+     * 驾驶舱一次扫描结果。由 {@link #scanSubLevelForCockpit(SubLevel, Level)} 返回，
+     * 替代原本 {@code containsCockpit + hasUniqueCockpit + findCockpitBlockInSubLevel}
+     * 的三次独立扫描。
+     *
+     * @param hasCockpit       SubLevel 内是否包含至少一个驾驶舱组
+     * @param isUnique         驾驶舱结构是否唯一（一个组 + 一个下半截）
+     * @param cockpitWorldPos  驾驶舱核心方块的世界坐标（底部中心），无驾驶舱时为 null
+     * @param cockpitGroupId   驾驶舱组索引（ALL_COCKPIT_GROUPS 中的索引），无驾驶舱时为 -1
+     * @param lowerHalfCount   核心下半截方块数量（用于诊断）
+     */
+    public record CockpitScanResult(
+            boolean hasCockpit,
+            boolean isUnique,
+            @Nullable BlockPos cockpitWorldPos,
+            int cockpitGroupId,
+            int lowerHalfCount
     ) {}
 
     private static final Map<UUID, MountData> MOUNTED = new ConcurrentHashMap<>();
@@ -165,115 +182,75 @@ public class PlayerMountTracker {
     );
 
     /**
-     * 扫描 SubLevel 的所有已加载 chunk，使用直接方块实例比较找出所有驾驶舱组。
+     * 单次扫描 SubLevel，一次性获取驾驶舱检测所需的所有信息。
      * <p>
-     * 正确做法：遍历 {@code plot.getLoadedChunks()}，用 chunk 的全局坐标
-     * （{@code chunk.getPos().getMinBlockX/Z()}）将局部偏移转为世界坐标。
-     * 不要使用 {@code logicalPose().transformPosition()} —— 那会得到错误的位置。
-     *
-     * @return 找到的驾驶舱组的索引集合（从 ALL_COCKPIT_GROUPS 中的索引）
+     * 替代原本 {@code findCockpitGroups + containsCockpit + hasUniqueCockpit + findCockpitBlockInSubLevel}
+     * 的四次独立 chunk 扫描。一次遍历完成全部判断。
+     * <p>
+     * 使用 {@link SubLevelScanner#forEachBlock(SubLevel, Level, SubLevelScanner.BlockVisitor)}
+     * 统一遍历逻辑，消除 boilerplate。
      */
-    public static Set<Integer> findCockpitGroups(SubLevel subLevel, Level level) {
-        Set<Integer> foundGroups = new HashSet<>();
+    public static CockpitScanResult scanSubLevelForCockpit(SubLevel subLevel, Level level) {
+        Set<Integer> groupIds = new HashSet<>();
+        int[] lowerHalfCount = {0};
+        BlockPos[] firstCockpitPos = {null};
+        int[] firstGroupId = {-1};
 
-        LevelPlot plot = subLevel.getPlot();
-        if (plot == null) return foundGroups;
+        SubLevelScanner.forEachBlock(subLevel, level, (worldPos, state, be) -> {
+            Block block = state.getBlock();
 
-        for (PlotChunkHolder chunk : plot.getLoadedChunks()) {
-            BoundingBox3ic localBounds = chunk.getBoundingBox();
-            if (localBounds == null || localBounds == BoundingBox3i.EMPTY) continue;
+            // 检查驾驶舱组
+            for (int g = 0; g < ALL_COCKPIT_GROUPS.size(); g++) {
+                if (ALL_COCKPIT_GROUPS.get(g).contains(block)) {
+                    groupIds.add(g);
+                }
+            }
 
-            int chunkMinX = chunk.getPos().getMinBlockX();
-            int chunkMinZ = chunk.getPos().getMinBlockZ();
-
-            for (int x = localBounds.minX(); x <= localBounds.maxX(); x++) {
-                for (int y = localBounds.minY(); y <= localBounds.maxY(); y++) {
-                    for (int z = localBounds.minZ(); z <= localBounds.maxZ(); z++) {
-                        BlockPos worldPos = new BlockPos(
-                                x + chunkMinX, y, z + chunkMinZ
-                        );
-                        BlockState state = level.getBlockState(worldPos);
-                        Block block = state.getBlock();
-
-                        for (int g = 0; g < ALL_COCKPIT_GROUPS.size(); g++) {
-                            if (ALL_COCKPIT_GROUPS.get(g).contains(block)) {
-                                foundGroups.add(g);
-                            }
-                        }
+            // 记录第一个驾驶舱核心方块的位置
+            if (firstCockpitPos[0] == null && CORE_LOWER_HALVES.contains(block)) {
+                firstCockpitPos[0] = worldPos;
+                // 找到对应的组 ID
+                for (int g = 0; g < ALL_COCKPIT_GROUPS.size(); g++) {
+                    if (ALL_COCKPIT_GROUPS.get(g).contains(block)) {
+                        firstGroupId[0] = g;
+                        break;
                     }
                 }
             }
-        }
 
-        return foundGroups;
+            // 统计核心下半截
+            if (CORE_LOWER_HALVES.contains(block)) {
+                lowerHalfCount[0]++;
+            }
+        });
+
+        boolean hasCockpit = !groupIds.isEmpty();
+        boolean isUnique = hasCockpit
+                && groupIds.size() == 1   // 只有一个驾驶舱组
+                && lowerHalfCount[0] == 1;   // 只有一个下半截
+
+        return new CockpitScanResult(hasCockpit, isUnique, firstCockpitPos[0], firstGroupId[0], lowerHalfCount[0]);
     }
 
     /**
      * 检查 SubLevel 内是否包含任何驾驶舱核心方块。
-     * 用于目标 4：宽泛射线命中时判断结构是否为载具。
+     * 使用 {@link #scanSubLevelForCockpit(SubLevel, Level)} 单次扫描。
      */
     public static boolean containsCockpit(SubLevel subLevel, Level level) {
-        return !findCockpitGroups(subLevel, level).isEmpty();
+        return scanSubLevelForCockpit(subLevel, level).hasCockpit();
     }
 
     /**
-     * 目标 1：检查 SubLevel 内的驾驶舱结构是否唯一（无多余驾驶舱）。
+     * 检查 SubLevel 内的驾驶舱结构是否唯一（无多余驾驶舱）。
      * <p>
-     * 规则（使用直接方块实例比较 + chunk 遍历）：
+     * 规则（使用直接方块实例比较 + 单次扫描）：
      * <ul>
      *   <li>只能存在一个驾驶舱组</li>
      *   <li>该组内只能有一个"核心下半截"方块</li>
      * </ul>
      */
     public static boolean hasUniqueCockpit(SubLevel subLevel, Level level) {
-        LevelPlot plot = subLevel.getPlot();
-        if (plot == null) return false;
-
-        Set<Integer> groupIds = new HashSet<>();
-        int lowerHalfCount = 0;
-
-        for (PlotChunkHolder chunk : plot.getLoadedChunks()) {
-            BoundingBox3ic localBounds = chunk.getBoundingBox();
-            if (localBounds == null || localBounds == BoundingBox3i.EMPTY) continue;
-
-            int chunkMinX = chunk.getPos().getMinBlockX();
-            int chunkMinZ = chunk.getPos().getMinBlockZ();
-
-            for (int x = localBounds.minX(); x <= localBounds.maxX(); x++) {
-                for (int y = localBounds.minY(); y <= localBounds.maxY(); y++) {
-                    for (int z = localBounds.minZ(); z <= localBounds.maxZ(); z++) {
-                        BlockPos worldPos = new BlockPos(
-                                x + chunkMinX, y, z + chunkMinZ
-                        );
-                        BlockState state = level.getBlockState(worldPos);
-                        Block block = state.getBlock();
-
-                        // 检查驾驶舱组
-                        for (int g = 0; g < ALL_COCKPIT_GROUPS.size(); g++) {
-                            if (ALL_COCKPIT_GROUPS.get(g).contains(block)) {
-                                groupIds.add(g);
-                            }
-                        }
-
-                        // 统计核心下半截
-                        if (CORE_LOWER_HALVES.contains(block)) {
-                            lowerHalfCount++;
-                        }
-                    }
-                }
-            }
-        }
-
-        // 必须至少有一个驾驶舱组
-        if (groupIds.isEmpty()) return false;
-
-        // 不能有多个不同驾驶舱组
-        if (groupIds.size() > 1) return false;
-
-        // 只能有一个核心下半截
-        if (lowerHalfCount > 1) return false;
-
-        return true;
+        return scanSubLevelForCockpit(subLevel, level).isUnique();
     }
 
     // ====== 每 tick 处理 ======
@@ -435,6 +412,29 @@ public class PlayerMountTracker {
         player.onUpdateAbilities();
         // 移除无敌状态（上车时设为 true），恢复可被伤害
         player.setInvulnerable(false);
+    }
+
+    // ====== 服务端生命周期清理 ======
+
+    /**
+     * 服务端启动/重启时清理所有残留骑乘状态。
+     * <p>
+     * 集成服务器重启时，{@link #MOUNTED} 和 {@link #SUBLEVEL_OCCUPANTS} 中的
+     * ConcurrentHashMap 在类加载后仍是空的，无需清理。
+     * 但在某些热加载/reload 场景下可能有残留，保险起见在 server starting 时清空。
+     * <p>
+     * 此方法通过 {@code MinecraftForge.EVENT_BUS} 注册在 {@link IACP#IACP()} 中，
+     * 响应 {@link net.neoforged.neoforge.event.server.ServerStartingEvent}。
+     */
+    @SubscribeEvent
+    public static void onServerStarting(ServerStartingEvent event) {
+        if (!MOUNTED.isEmpty()) {
+            IACP.LOGGER.info("[ServerMount] 服务端启动，清理 {} 条残留骑乘状态", MOUNTED.size());
+            MOUNTED.clear();
+        }
+        if (!SUBLEVEL_OCCUPANTS.isEmpty()) {
+            SUBLEVEL_OCCUPANTS.clear();
+        }
     }
 
     // ====== 重新进入世界时清理 ======

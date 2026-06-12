@@ -48,9 +48,15 @@
 |------|---------|
 | `.../content/blocks/seat/SeatBlock.java` | Original vehicle core (legacy) |
 | `.../content/blocks/cockpit/CockpitBlock.java` | Cockpit dual-block structure |
-| `.../content/blocks/cockpit/CockpitBlockEntity.java` | Cockpit tick logic + smartMappingActive NBT persistence |
+| `.../content/blocks/cockpit/CockpitBlockEntity.java` | Cockpit BE — orchestrates EngineModel/TransmissionModel, state + NBT |
+| `.../content/blocks/cockpit/PowertrainConstants.java` | 🆕 Powertrain compile-time constants (engine/transmission/throttle) |
+| `.../content/blocks/cockpit/EngineModel.java` | 🆕 Engine pure functions (mass-adaptive torque, torque curve, throttle, coupling) |
+| `.../content/blocks/cockpit/TransmissionModel.java` | 🆕 Transmission pure functions (gear shift, RPM sync, output distribution) |
 | `.../content/blocks/suspension_test/SuspensionTestBlock.java` | Suspension + wheel test block |
-| `.../content/blocks/suspension_test/SuspensionTestBlockEntity.java` | Suspension physics tick + smartKey* fields + getActiveKey*() fallback |
+| `.../content/blocks/suspension_test/SuspensionConstants.java` | 🆕 All suspension/tire/steering compile-time constants |
+| `.../content/blocks/suspension_test/TirePhysicsCalculator.java` | 🆕 Tire physics pure functions (rolling resistance, burst, deflection) |
+| `.../content/blocks/suspension_test/BrushTireModel.java` | 🆕 Brush tire lateral slip pure function |
+| `.../content/blocks/suspension_test/SuspensionTestBlockEntity.java` | Suspension BE — orchestrates physics tick + smartKey* fallback |
 | `.../content/blocks/turret/TurretBaseBlock.java` | Turret base (KineticBlock + ICogWheel) |
 | `.../content/blocks/turret/TurretBaseBlockEntity.java` | Turret yaw servo, pitch servo |
 | `.../content/blocks/turret/TurretAimController.java` | Auto-aim logic (server-side) |
@@ -64,6 +70,7 @@
 | `.../events/PlayerMountTracker.java` | Mount state tracking, `tick()` for aim controller |
 | `.../events/ServerMountHandler.java` | Server-side mount logic |
 | `.../events/MountedProtectionHandler.java` | Damage immunity & aggro suppression |
+| `.../events/SubLevelScanner.java` | 🆕 SubLevel chunk traversal utility (unifies 9 boilerplate loops) |
 
 ## Index / Registration
 
