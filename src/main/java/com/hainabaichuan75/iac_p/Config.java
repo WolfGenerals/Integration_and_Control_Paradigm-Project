@@ -41,6 +41,19 @@ public class Config {
                 .define("cameraInvertY", false);
         BUILDER.pop().pop();
 
+        // ====== 实验性下车配置 ======
+        BUILDER.push("client").push("dismount");
+        DISMOUNT_EXPERIMENTAL_DIRECT = BUILDER
+                .comment("[Experimental] Direct vehicle-top dismount / 实验性：直传车顶下车",
+                        "When enabled, F-key dismount teleports the player directly to",
+                        "the vehicle's top block world coordinate, bypassing all safety",
+                        "position search. The player stands precisely on the vehicle's roof.",
+                        "车顶下车时直接传送到载具最高方块的世界坐标，",
+                        "不做安全位置搜索。玩家精确站在车顶方块上。",
+                        "Warning: May glitch into vehicle structure in complex builds!")
+                .define("experimentalDirectDismount", false);
+        BUILDER.pop().pop();
+
         // ====== Turret constraint anchor offsets ======
         // Four groups: (block center getCenterBlock()+0.5) + offset
         // Each group has three doubles: offsetX, offsetY, offsetZ (blocks)
@@ -104,6 +117,9 @@ public class Config {
 
         BUILDER.pop().pop();
     }
+
+    // ====== 实验性下车配置项 ======
+    public static final ModConfigSpec.BooleanValue DISMOUNT_EXPERIMENTAL_DIRECT;
 
     // ====== 炮塔约束锚点偏移配置项 ======
     // 避雷针(炮管)端约束锚点偏移
