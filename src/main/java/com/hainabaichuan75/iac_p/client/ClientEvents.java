@@ -5,12 +5,13 @@ import com.hainabaichuan75.iac_p.client.screen.VehicleKeyConfigScreen;
 import com.hainabaichuan75.iac_p.client.screen.VehicleOrientationScreen;
 import com.hainabaichuan75.iac_p.content.blocks.cockpit.CockpitBlock;
 import com.hainabaichuan75.iac_p.content.blocks.debug_gear.DebugGearBlock;
+import com.hainabaichuan75.iac_p.content.blocks.debug_swivel.DebugSwivelBearingBlock;
 import com.hainabaichuan75.iac_p.content.blocks.suspension_test.SuspensionTestBlock;
 import com.hainabaichuan75.iac_p.content.blocks.suspension_test.SuspensionTestBlockEntity;
 import com.hainabaichuan75.iac_p.IACP;
-import com.hainabaichuan75.iac_p.events.SableBlockHelper;
 import com.hainabaichuan75.iac_p.network.ModNetworking;
 import com.hainabaichuan75.iac_p.network.packets.DebugGearToggleC2SPacket;
+import com.hainabaichuan75.iac_p.network.packets.DebugSwivelToggleC2SPacket;
 import com.hainabaichuan75.iac_p.network.packets.GearShiftC2SPacket;
 import com.hainabaichuan75.iac_p.network.packets.SeatMountC2SPacket;
 import com.hainabaichuan75.iac_p.network.packets.TurretTargetC2SPacket;
@@ -51,8 +52,7 @@ import java.util.Map;
  *
  * <h3>骑乘时控制输入</h3>
  * 当玩家骑乘在载具 SubLevel 中时，每 2 ticks 扫描该 SubLevel 内的所有
- * 悬挂测试方块，检查每个方块配置的按键是否被按下，打包发送到服务端执行。
- * 设计原则：客户端只检测按键状态（按下/抬起），服务端执行物理动作。
+ * 悬挂测试方块，检查每个方块配置的按键是否被按下，打包发送到服务端执行。 设计原则：客户端只检测按键状态（按下/抬起），服务端执行物理动作。
  */
 @EventBusSubscriber(modid = IACP.MODID, value = Dist.CLIENT)
 public class ClientEvents {
@@ -62,7 +62,6 @@ public class ClientEvents {
     private static final String KEY_VEHICLE_CONFIG = "key.iac_p.vehicle_config";
     private static final String KEY_RAYCAST_FIRE = "key.iac_p.raycast_fire";
     private static final String KEY_DEBUG_GEAR = "key.iac_p.debug_gear";
-    private static final String KEY_DEBUG_SUBLEVEL_HIT = "key.iac_p.debug_sublevel_hit";
 
     private static final Lazy<KeyMapping> MOUNT_KEY = Lazy.of(() -> new KeyMapping(
             KEY_MOUNT,
@@ -96,33 +95,37 @@ public class ClientEvents {
             KEY_CATEGORY
     ));
 
-    /** P 键：SubLevel 命中调试测试 */
-    private static final Lazy<KeyMapping> DEBUG_SUBLEVEL_HIT_KEY = Lazy.of(() -> new KeyMapping(
-            KEY_DEBUG_SUBLEVEL_HIT,
-            KeyConflictContext.IN_GAME,
-            com.mojang.blaze3d.platform.InputConstants.Type.KEYSYM,
-            GLFW.GLFW_KEY_P,
-            KEY_CATEGORY
-    ));
-
-    /** 载具控制数据包发送间隔（每 2 ticks ≈ 10 次/秒） */
+    /**
+     * 载具控制数据包发送间隔（每 2 ticks ≈ 10 次/秒）
+     */
     private static int vehicleControlCooldown = 0;
 
-    /** 上次发送的控制状态（用于检测状态变化，减少发包） */
+    /**
+     * 上次发送的控制状态（用于检测状态变化，减少发包）
+     */
     private static final Map<BlockPos, boolean[]> lastControlStates = new HashMap<>();
 
-    /** 换挡按键上升沿检测 —— 上次 tick 时 Q 键是否被按下 */
+    /**
+     * 换挡按键上升沿检测 —— 上次 tick 时 Q 键是否被按下
+     */
     private static boolean gearUpKeyWasDown = false;
-    /** 换挡按键上升沿检测 —— 上次 tick 时 E 键是否被按下 */
+    /**
+     * 换挡按键上升沿检测 —— 上次 tick 时 E 键是否被按下
+     */
     private static boolean gearDownKeyWasDown = false;
 
-    /** 上次开火的游戏刻（用于冷却判断） */
+    /**
+     * 上次开火的游戏刻（用于冷却判断）
+     */
     private static int lastFireGameTime = 0;
-    /** 开火最小间隔（tick） */
+    /**
+     * 开火最小间隔（tick）
+     */
     private static final int FIRE_COOLDOWN_TICKS = 3;
 
-    /** 持续射线检测冷却（已废弃，现为每 tick 检测） */
-
+    /**
+     * 持续射线检测冷却（已废弃，现为每 tick 检测）
+     */
     /**
      * 返回挂载/卸载键位映射，用于注册。
      */
@@ -151,17 +154,12 @@ public class ClientEvents {
         return DEBUG_GEAR_KEY.get();
     }
 
-    /**
-     * 返回 SubLevel 命中调试测试键位映射，用于注册。
-     */
-    public static KeyMapping getDebugSubLevelHitKey() {
-        return DEBUG_SUBLEVEL_HIT_KEY.get();
-    }
-
     @SubscribeEvent
     public static void onKeyInput(InputEvent.Key event) {
         var mc = Minecraft.getInstance();
-        if (mc.player == null || mc.level == null) return;
+        if (mc.player == null || mc.level == null) {
+            return;
+        }
 
         if (MOUNT_KEY.get().consumeClick()) {
             // 按下 F 键 → 发送上车/下车请求到服务端
@@ -178,7 +176,7 @@ public class ClientEvents {
         }
 
         if (DEBUG_GEAR_KEY.get().consumeClick()) {
-            // 按下 N 键 → 射线检测找调试齿轮 → 切换调试输出
+            // 按下 N 键 → 射线检测找调试方块 → 切换调试输出
             Vec3 eyePos2 = mc.player.getEyePosition();
             Vec3 lookVec2 = mc.player.getLookAngle().scale(8.0);
             BlockHitResult hitResult = mc.level.clip(
@@ -186,10 +184,16 @@ public class ClientEvents {
             );
             if (hitResult.getType() == HitResult.Type.BLOCK) {
                 BlockPos hitPos = hitResult.getBlockPos();
-                if (mc.level.getBlockState(hitPos).getBlock() instanceof DebugGearBlock) {
+                BlockState hitState = mc.level.getBlockState(hitPos);
+                if (hitState.getBlock() instanceof DebugGearBlock) {
                     ModNetworking.sendToServer(new DebugGearToggleC2SPacket(hitPos));
                     mc.player.displayClientMessage(
                             net.minecraft.network.chat.Component.translatable("message.iac_p.debug_gear_toggled"),
+                            false);
+                } else if (hitState.getBlock() instanceof DebugSwivelBearingBlock) {
+                    ModNetworking.sendToServer(new DebugSwivelToggleC2SPacket(hitPos));
+                    mc.player.displayClientMessage(
+                            net.minecraft.network.chat.Component.translatable("message.iac_p.debug_swivel_toggled"),
                             false);
                 } else {
                     mc.player.displayClientMessage(
@@ -199,105 +203,10 @@ public class ClientEvents {
             }
         }
 
-        if (DEBUG_SUBLEVEL_HIT_KEY.get().consumeClick()) {
-            // 按下 P 键 → SubLevel 命中调试测试
-            // 模拟 PartDamageCache.damageBlock() 的完整代码路径
-            var player = mc.player;
-            var level = mc.level;
-            if (player == null || level == null) return;
-
-            Vec3 eye = player.getEyePosition();
-            Vec3 look = player.getLookAngle();
-            Vec3 end = eye.add(look.scale(WeaponOverlay.MAX_RAY_DISTANCE));
-
-            player.displayClientMessage(
-                    net.minecraft.network.chat.Component.literal("§e[SubLevelHitTest] 开始测试..."),
-                    false);
-
-            // === 测试 A：Minecraft 原生 clip 命中 ===
-            player.displayClientMessage(
-                    net.minecraft.network.chat.Component.literal("§6═══ 测试 A：Minecraft clip（plot chunk 坐标系） ═══"),
-                    false);
-            ClipContext ctx = new ClipContext(eye, end, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, player);
-            BlockHitResult bhr = level.clip(ctx);
-            if (bhr.getType() == HitResult.Type.MISS) {
-                player.displayClientMessage(
-                        net.minecraft.network.chat.Component.literal("§c✗ Minecraft clip 未命中"),
-                        false);
-            } else {
-                BlockPos bp = bhr.getBlockPos();
-                player.displayClientMessage(
-                        net.minecraft.network.chat.Component.literal("§7  clip @ " + bhr.getLocation() + " → BlockPos=" + bp + " Block=" + level.getBlockState(bp).getBlock()),
-                        false);
-
-                // 用旧方案（getContaining）查 plot chunk 坐标
-                var oldAccess = Sable.HELPER.getContaining(level, bp);
-                if (oldAccess != null) {
-                    player.displayClientMessage(
-                            net.minecraft.network.chat.Component.literal("§a  [旧方案] getContaining(BlockPos) ✅ SubLevel=" + oldAccess.getUniqueId().toString().substring(0, 8)),
-                            false);
-                } else {
-                    player.displayClientMessage(
-                            net.minecraft.network.chat.Component.literal("§c  [旧方案] getContaining(BlockPos) ❌ 不在 plot grid 中"),
-                            false);
-                }
-            }
-
-            // === 测试 B：模拟武器系统的物理世界坐标命中 ===
-            player.displayClientMessage(
-                    net.minecraft.network.chat.Component.literal("§6═══ 测试 B：使用 SableBlockHelper.findSubLevelAt() ═══"),
-                    false);
-
-            // 用 clip 命中点的位置测试新方案
-            Vec3 testHitPos = bhr.getType() != HitResult.Type.MISS
-                    ? bhr.getLocation()
-                    : eye.add(look.scale(100));
-            BlockPos.MutableBlockPos outBP = new BlockPos.MutableBlockPos();
-            var newAccess = SableBlockHelper.findSubLevelAt(level, testHitPos, outBP);
-
-            if (newAccess != null) {
-                BlockState bs = level.getBlockState(outBP);
-                player.displayClientMessage(
-                        net.minecraft.network.chat.Component.literal("§a✅ 命中! SubLevel=" + newAccess.getUniqueId().toString().substring(0, 8)
-                                + " localBP=" + outBP + " Block=" + bs.getBlock()),
-                        false);
-                player.displayClientMessage(
-                        net.minecraft.network.chat.Component.literal("§7   destroySpeed=" + bs.getDestroySpeed(level, outBP)
-                                + " isAir=" + bs.isAir()),
-                        false);
-
-                // 验证 SubLevel 物理 BB
-                var bb = newAccess.boundingBox();
-                if (bb != null) {
-                    boolean inPhysBB = testHitPos.x >= bb.minX() && testHitPos.x <= bb.maxX()
-                            && testHitPos.y >= bb.minY() && testHitPos.y <= bb.maxY()
-                            && testHitPos.z >= bb.minZ() && testHitPos.z <= bb.maxZ();
-                    player.displayClientMessage(
-                            net.minecraft.network.chat.Component.literal("§7   物理BB=[" + String.format("%.1f", bb.minX()) + "," + String.format("%.1f", bb.minY()) + "," + String.format("%.1f", bb.minZ())
-                                    + "]~[" + String.format("%.1f", bb.maxX()) + "," + String.format("%.1f", bb.maxY()) + "," + String.format("%.1f", bb.maxZ()) + "]"
-                                    + " hitPos-in-BB=" + inPhysBB),
-                            false);
-                }
-            } else {
-                player.displayClientMessage(
-                        net.minecraft.network.chat.Component.literal("§c❌ findSubLevelAt 未命中任何 SubLevel"),
-                        false);
-                player.displayClientMessage(
-                        net.minecraft.network.chat.Component.literal("§7  → 试试把准星对准载具物理结构"),
-                        false);
-            }
-
-            player.displayClientMessage(
-                    net.minecraft.network.chat.Component.literal("§e[SubLevelHitTest] 测试结束"),
-                    false);
-        }
     }
 
-
-
     /**
-     * 尝试打开载具按键配置界面。
-     * 从玩家准星出发做射线检测，如果命中悬挂测试方块则打开配置界面。
+     * 尝试打开载具按键配置界面。 从玩家准星出发做射线检测，如果命中悬挂测试方块则打开配置界面。
      *
      * @return 是否成功打开界面
      */
@@ -306,15 +215,17 @@ public class ClientEvents {
      * <p>
      * 有两种触发路径：
      * <ol>
-     *   <li>已上车 → 直接使用缓存中的朝向数据打开界面</li>
-     *   <li>未上车 → 6 格射线检测，如果命中驾驶舱方块（CockpitBlock），
-     *       查找其所属 SubLevel 并扫描悬挂朝向，然后打开界面</li>
+     * <li>已上车 → 直接使用缓存中的朝向数据打开界面</li>
+     * <li>未上车 → 6 格射线检测，如果命中驾驶舱方块（CockpitBlock）， 查找其所属 SubLevel
+     * 并扫描悬挂朝向，然后打开界面</li>
      * </ol>
      *
      * @return 是否成功打开界面
      */
     private static boolean tryOpenVehicleOrientationScreen(Minecraft mc) {
-        if (mc.player == null || mc.level == null) return false;
+        if (mc.player == null || mc.level == null) {
+            return false;
+        }
 
         SubLevel targetSubLevel = null;
 
@@ -332,22 +243,30 @@ public class ClientEvents {
             BlockHitResult hitResult = mc.level.clip(
                     new ClipContext(eyePos, endPos, ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, mc.player)
             );
-            if (hitResult.getType() == HitResult.Type.MISS) return false;
+            if (hitResult.getType() == HitResult.Type.MISS) {
+                return false;
+            }
 
             BlockPos hitPos = hitResult.getBlockPos();
             BlockState hitState = mc.level.getBlockState(hitPos);
-            if (!(hitState.getBlock() instanceof CockpitBlock)) return false;
+            if (!(hitState.getBlock() instanceof CockpitBlock)) {
+                return false;
+            }
 
             // 查找驾驶舱所属的 SubLevel
             targetSubLevel = dev.ryanhcode.sable.Sable.HELPER.getContaining(mc.level, hitPos);
-            if (targetSubLevel == null) return false;
+            if (targetSubLevel == null) {
+                return false;
+            }
 
             // 扫描并缓存朝向数据
             ClientMountHandler.scanOrientation(targetSubLevel, mc.level);
             ClientMountHandler.syncSmartMappingState(targetSubLevel, mc.level);
         }
 
-        if (targetSubLevel == null) return false;
+        if (targetSubLevel == null) {
+            return false;
+        }
 
         // 打开朝向信息界面（交互式，含汽车模式/反转/开关按钮）
         VehicleOrientationData data = ClientMountHandler.getOrientationData(targetSubLevel.getUniqueId());
@@ -357,7 +276,9 @@ public class ClientEvents {
     }
 
     private static boolean tryOpenVehicleConfigScreen(Minecraft mc) {
-        if (mc.player == null || mc.level == null) return false;
+        if (mc.player == null || mc.level == null) {
+            return false;
+        }
 
         // 5 格射线检测
         Vec3 eyePos = mc.player.getEyePosition();
@@ -367,11 +288,15 @@ public class ClientEvents {
         BlockHitResult hitResult = mc.level.clip(
                 new ClipContext(eyePos, endPos, ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, mc.player)
         );
-        if (hitResult.getType() == HitResult.Type.MISS) return false;
+        if (hitResult.getType() == HitResult.Type.MISS) {
+            return false;
+        }
 
         BlockPos hitPos = hitResult.getBlockPos();
         BlockState hitState = mc.level.getBlockState(hitPos);
-        if (!(hitState.getBlock() instanceof SuspensionTestBlock)) return false;
+        if (!(hitState.getBlock() instanceof SuspensionTestBlock)) {
+            return false;
+        }
 
         mc.setScreen(new VehicleKeyConfigScreen(hitPos));
         return true;
@@ -384,7 +309,9 @@ public class ClientEvents {
      * B 键单发开火：摄像机瞄准 + 所有炮台从炮口发射。
      */
     private static void fireWeapon(Minecraft mc) {
-        if (!ClientMountHandler.isMounted()) return;
+        if (!ClientMountHandler.isMounted()) {
+            return;
+        }
         // 摄像机瞄准（用于炮塔指向）
         Vec3 hitPos = WeaponOverlay.performRaycast();
         if (hitPos != null) {
@@ -401,7 +328,9 @@ public class ClientEvents {
     }
 
     private static void tryOpenGrindstoneConfigScreen(Minecraft mc) {
-        if (mc.player == null || mc.level == null) return;
+        if (mc.player == null || mc.level == null) {
+            return;
+        }
 
         Vec3 eyePos = mc.player.getEyePosition();
         Vec3 lookVec = mc.player.getLookAngle();
@@ -410,7 +339,9 @@ public class ClientEvents {
         BlockHitResult hitResult = mc.level.clip(
                 new ClipContext(eyePos, endPos, ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, mc.player)
         );
-        if (hitResult.getType() == HitResult.Type.MISS) return;
+        if (hitResult.getType() == HitResult.Type.MISS) {
+            return;
+        }
 
         BlockPos hitPos = hitResult.getBlockPos();
         BlockState hitState = mc.level.getBlockState(hitPos);
@@ -418,11 +349,15 @@ public class ClientEvents {
         // 检测砂轮或避雷针
         boolean isGrindstone = hitState.is(Blocks.GRINDSTONE);
         boolean isRod = hitState.is(Blocks.LIGHTNING_ROD);
-        if (!isGrindstone && !isRod) return;
+        if (!isGrindstone && !isRod) {
+            return;
+        }
 
         // 检查是否在 SubLevel 中
         SubLevel subLevel = Sable.HELPER.getContaining(mc.level, hitPos);
-        if (subLevel == null) return;
+        if (subLevel == null) {
+            return;
+        }
 
         String name = isGrindstone ? "砂轮" : "避雷针";
         IACP.LOGGER.info("[ClientEvents] 检测到 SubLevel 中的{} @ worldPos={} subLevelUUID={}",
@@ -431,13 +366,14 @@ public class ClientEvents {
     }
 
     /**
-     * 骑乘时每 tick 读取 WASD/空格/潜行输入，发送到服务端。
-     * 使用冷却避免刷屏（每 20 tick 发送一次）。
+     * 骑乘时每 tick 读取 WASD/空格/潜行输入，发送到服务端。 使用冷却避免刷屏（每 20 tick 发送一次）。
      */
     @SubscribeEvent
     public static void onClientTick(ClientTickEvent.Post event) {
         var mc = Minecraft.getInstance();
-        if (mc.player == null || mc.level == null) return;
+        if (mc.player == null || mc.level == null) {
+            return;
+        }
 
         // ===== 载具控制输入检测（骑乘时） =====
         if (ClientMountHandler.isMounted() && mc.screen == null) {
@@ -503,9 +439,8 @@ public class ClientEvents {
     /**
      * 检测每个悬挂方块配置的按键是否被按下，打包发送到服务端。
      * <p>
-     * 性能优化：使用 {@link ClientMountHandler#getSuspensionPositions()} 缓存的位置列表，
-     * 不再每 2 tick 全量扫描 SubLevel chunks。
-     * 仅当有状态变化时才发送，减少网络开销。
+     * 性能优化：使用 {@link ClientMountHandler#getSuspensionPositions()} 缓存的位置列表， 不再每
+     * 2 tick 全量扫描 SubLevel chunks。 仅当有状态变化时才发送，减少网络开销。
      */
     private static void sendVehicleControlInput(Minecraft mc) {
         List<BlockPos> positions = ClientMountHandler.getSuspensionPositions();
@@ -520,18 +455,22 @@ public class ClientEvents {
 
         for (BlockPos worldPos : positions) {
             BlockState state = mc.level.getBlockState(worldPos);
-            if (!(state.getBlock() instanceof SuspensionTestBlock)) continue;
+            if (!(state.getBlock() instanceof SuspensionTestBlock)) {
+                continue;
+            }
 
             BlockEntity be = mc.level.getBlockEntity(worldPos);
-            if (!(be instanceof SuspensionTestBlockEntity suspension)) continue;
+            if (!(be instanceof SuspensionTestBlockEntity suspension)) {
+                continue;
+            }
 
             // 检查该方块配置的按键是否被按下
             // 使用智能映射键（如果设置了），否则回退到手动配置键
-            boolean fwd  = InputConstants.isKeyDown(window, InputConstants.getKey(suspension.getActiveKeyForward()).getValue());
-            boolean bwd  = InputConstants.isKeyDown(window, InputConstants.getKey(suspension.getActiveKeyBackward()).getValue());
+            boolean fwd = InputConstants.isKeyDown(window, InputConstants.getKey(suspension.getActiveKeyForward()).getValue());
+            boolean bwd = InputConstants.isKeyDown(window, InputConstants.getKey(suspension.getActiveKeyBackward()).getValue());
             boolean left = InputConstants.isKeyDown(window, InputConstants.getKey(suspension.getActiveKeyLeft()).getValue());
-            boolean right= InputConstants.isKeyDown(window, InputConstants.getKey(suspension.getActiveKeyRight()).getValue());
-            boolean brake= InputConstants.isKeyDown(window, InputConstants.getKey(suspension.getActiveKeyBrake()).getValue());
+            boolean right = InputConstants.isKeyDown(window, InputConstants.getKey(suspension.getActiveKeyRight()).getValue());
+            boolean brake = InputConstants.isKeyDown(window, InputConstants.getKey(suspension.getActiveKeyBrake()).getValue());
 
             // === 同步控制输入到客户端 BE，以驱动视觉动画 ===
             // 这样轮子的 activeRpm、targetSteeringYaw、braking 在客户端也被正确设置，
@@ -564,13 +503,17 @@ public class ClientEvents {
     /**
      * 骑乘时完全隐藏玩家模型及衍生粒子发射器。
      * <p>
-     * 取消整个渲染事件，使玩家模型、装备、名称标签均不渲染。
-     * 再加上 {@code player.setInvisible(true)} 抑制大部分粒子生成。
+     * 取消整个渲染事件，使玩家模型、装备、名称标签均不渲染。 再加上 {@code player.setInvisible(true)}
+     * 抑制大部分粒子生成。
      */
     @SubscribeEvent
     public static void onRenderPlayer(RenderPlayerEvent.Pre event) {
-        if (!ClientMountHandler.isMounted()) return;
-        if (event.getEntity() != net.minecraft.client.Minecraft.getInstance().player) return;
+        if (!ClientMountHandler.isMounted()) {
+            return;
+        }
+        if (event.getEntity() != net.minecraft.client.Minecraft.getInstance().player) {
+            return;
+        }
 
         event.setCanceled(true);
     }

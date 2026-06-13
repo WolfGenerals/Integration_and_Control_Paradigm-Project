@@ -1,5 +1,6 @@
 package com.hainabaichuan75.iac_p.content.blocks.turret;
 
+import com.hainabaichuan75.iac_p.Config;
 import com.hainabaichuan75.iac_p.IACP;
 import com.hainabaichuan75.iac_p.events.SubLevelOwnership;
 import com.hainabaichuan75.iac_p.index.ModBlockEntityTypes;
@@ -45,8 +46,7 @@ import java.util.UUID;
 /**
  * TurretBaseBlockEntity —— 炮塔底座 BE。
  * <p>
- * 右键后，在底座附近的主世界坐标生成一个原版砂轮的物理化 SubLevel。
- * 再右键一次即可拆卸（移除该 SubLevel）。
+ * 右键后，在底座附近的主世界坐标生成一个原版砂轮的物理化 SubLevel。 再右键一次即可拆卸（移除该 SubLevel）。
  * 这是最简单的"一步到位"方案，后续可扩展更多功能。
  */
 public class TurretBaseBlockEntity extends KineticBlockEntity {
@@ -54,13 +54,12 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
     // ==================================================================
     //  静态注册表：砂轮 SubLevel UUID → 炮塔底座位置（供网络包查找）
     // ==================================================================
-
     private static final java.util.Map<java.util.UUID, BlockPos> GRINDSTONE_OWNER_MAP = new java.util.HashMap<>();
     private static final java.util.Map<java.util.UUID, BlockPos> ROD_OWNER_MAP = new java.util.HashMap<>();
 
     /**
-     * 客户端锚点缓存：砂轮 SubLevel UUID → [anchorX, anchorY, anchorZ]
-     * 在 read() 收到客户端同步数据时更新，供配置界面使用
+     * 客户端锚点缓存：砂轮 SubLevel UUID → [anchorX, anchorY, anchorZ] 在 read()
+     * 收到客户端同步数据时更新，供配置界面使用
      */
     private static final java.util.Map<java.util.UUID, double[]> GRINDSTONE_ANCHOR_MAP = new java.util.HashMap<>();
 
@@ -72,33 +71,43 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
 
     /**
      * 客户端静态缓存：包含地毯的 SubLevel UUID → 该 SubLevel 上所有地毯的局部 BlockPos 列表
-     * 支持同一个物理结构上放置多个炮塔地毯，每个地毯独立渲染三色焦点标记
-     * 在 read() 客户端同步时通过 Sable.HELPER.getContaining(this) 获取
+     * 支持同一个物理结构上放置多个炮塔地毯，每个地毯独立渲染三色焦点标记 在 read() 客户端同步时通过
+     * Sable.HELPER.getContaining(this) 获取
      */
     private static final java.util.Map<java.util.UUID, java.util.List<BlockPos>> CARPET_LOCAL_POS_MAP = new java.util.HashMap<>();
 
-    /** 获取地毯位置缓存（客户端） */
+    /**
+     * 获取地毯位置缓存（客户端）
+     */
     public static java.util.Map<java.util.UUID, java.util.List<BlockPos>> getCarpetLocalPosMap() {
         return CARPET_LOCAL_POS_MAP;
     }
 
-    /** 获取客户端的锚点数据（供配置界面使用） */
+    /**
+     * 获取客户端的锚点数据（供配置界面使用）
+     */
     public static java.util.Map<java.util.UUID, double[]> getAnchorMap() {
         return GRINDSTONE_ANCHOR_MAP;
     }
 
-    /** 获取客户端的线条缓存（供渲染器使用） */
+    /**
+     * 获取客户端的线条缓存（供渲染器使用）
+     */
     public static java.util.Map<java.util.UUID, double[]> getLineCache() {
         return GRINDSTONE_LINE_CACHE;
     }
 
-    /** 根据砂轮 SubLevel UUID 查找拥有它的底座位置 */
+    /**
+     * 根据砂轮 SubLevel UUID 查找拥有它的底座位置
+     */
     @Nullable
     public static BlockPos findOwnerByGrindstoneUUID(UUID uuid) {
         return GRINDSTONE_OWNER_MAP.get(uuid);
     }
 
-    /** 根据避雷针 SubLevel UUID 查找拥有它的底座位置 */
+    /**
+     * 根据避雷针 SubLevel UUID 查找拥有它的底座位置
+     */
     @Nullable
     public static BlockPos findOwnerByRodUUID(UUID uuid) {
         return ROD_OWNER_MAP.get(uuid);
@@ -107,35 +116,52 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
     // ==================================================================
     //  运行时状态
     // ==================================================================
-
-    /** 是否已装配 */
+    /**
+     * 是否已装配
+     */
     private boolean assembled = false;
 
-    /** 砂轮 SubLevel 的 UUID */
+    /**
+     * 砂轮 SubLevel 的 UUID
+     */
     @Nullable
     private UUID grindstoneSubLevelId;
 
-    /** 避雷针 SubLevel 的 UUID */
+    /**
+     * 避雷针 SubLevel 的 UUID
+     */
     @Nullable
     private UUID lightningRodSubLevelId;
 
-    /** 炮管(避雷针)↔砂轮 俯仰约束句柄（RotaryConstraint，局部 X 轴旋转 = 高低机） */
+    /**
+     * 炮管(避雷针)↔砂轮 俯仰约束句柄（RotaryConstraint，局部 X 轴旋转 = 高低机）
+     */
     @Nullable
     private PhysicsConstraintHandle barrelPitchHandle;
 
-    /** 车体 SubLevel 的 UUID（用于瞄准时获取车体姿态，null = 放在主世界） */
+    /**
+     * 车体 SubLevel 的 UUID（用于瞄准时获取车体姿态，null = 放在主世界）
+     */
     @Nullable
     private UUID vehicleSubLevelId;
 
-    /** (已移除) 避雷针↔载具 不再直接约束——物理引擎通过约束链自行处理 */
-    /** 避雷针↔载具 FreeConstraint：仅用于禁用碰撞（防止俯仰时被车体卡住） */
+    /**
+     * (已移除) 避雷针↔载具 不再直接约束——物理引擎通过约束链自行处理
+     */
+    /**
+     * 避雷针↔载具 FreeConstraint：仅用于禁用碰撞（防止俯仰时被车体卡住）
+     */
     @Nullable
     private PhysicsConstraintHandle rodVehicleFreeHandle;
-    /** 砂轮↔载具 旋转轴承约束句柄（RotaryConstraint = 铰链，保留一个旋转自由度） */
+    /**
+     * 砂轮↔载具 旋转轴承约束句柄（RotaryConstraint = 铰链，保留一个旋转自由度）
+     */
     @Nullable
     private PhysicsConstraintHandle swivelBearingHandle;
 
-    /** 锚点 A 在砂轮 SubLevel 局部空间中的坐标（默认零点 = 砂轮方块中心） */
+    /**
+     * 锚点 A 在砂轮 SubLevel 局部空间中的坐标（默认零点 = 砂轮方块中心）
+     */
     private double anchorX = 0.0;
     private double anchorY = 0.0;
     private double anchorZ = 0.0;
@@ -160,35 +186,67 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
     //  每 tick 用 position-mode setMotor 保持/驱动目标角度
     //  目标角度由 TurretAimController 按比例增量调节
     // ==================================================================
-
-    /** 当前目标偏航角度（度），由 AimController 增量调节 */
+    /**
+     * 当前目标偏航角度（度），由 AimController 增量调节
+     */
     private double targetAngleDegrees = 0;
 
-    /** 上一 tick 的目标角度（度），用于 partialTick 插值 */
+    /**
+     * 上一 tick 的目标角度（度），用于 partialTick 插值
+     */
     private double lastTargetAngleDegrees = 0;
 
-    /** PD 伺服刚度（P 增益）*/
-    private static final double SERVO_STIFFNESS = 200.0;
+    //这玩意修改太大会导致不稳定
+    /**
+     * PD 伺服刚度（P 增益）
+     */
+    private static final double SERVO_STIFFNESS = 200000.0;
 
-    /** PD 伺服阻尼（D 增益）*/
-    private static final double SERVO_DAMPING = 16.0;
+    /**
+     * PD 伺服阻尼（D 增益）。从 16 提升到 100 以强力抑制过冲。
+     * <p>
+     * 代价：运动时略感粘滞，但配合限速轨迹规划（4.5°/tick） 应该影响不大。如果觉得太肉可以调回 50 左右。
+     */
+    private static final double SERVO_DAMPING = 50.0;
+
+    /**
+     * 方向机最大转速（度/游戏刻），从 Config 的度/秒值自动换算。
+     * <p>
+     * 限速轨迹规划：每 tick 最多移动此角度，最后 1 tick 精确到位、不超调。
+     */
+    private static double yawSpeedPerTick() {
+        return Config.TURRET_YAW_SPEED_DPS.get() / 20.0;
+    }
 
     // ====== 高低机（Pitch）位置模式 PD 伺服 ======
-
-    /** 当前目标俯仰角度（度），正直向上 */
+    /**
+     * 当前目标俯仰角度（度），正直向上
+     */
     private double targetPitchAngleDegrees = 0;
 
-    /** 上一 tick 的目标俯仰角度（度） */
+    /**
+     * 上一 tick 的目标俯仰角度（度）
+     */
     private double lastTargetPitchAngleDegrees = 0;
 
-    /** 俯仰 PD 刚度（×6 以对抗悬臂重力矩，减少稳态下垂） */
-    private static final double PITCH_SERVO_STIFFNESS = 6000.0;
+    /**
+     * 俯仰 PD 刚度。从 6000 提升到 600000（×1000，与方向机一致），超强瞬停。
+     */
+    private static final double PITCH_SERVO_STIFFNESS = 600000.0;
 
-    /** 俯仰 PD 阻尼（同比例增大 + 提升阻尼比保证稳定性） */
-    private static final double PITCH_SERVO_DAMPING = 400.0;
+    /**
+     * 俯仰 PD 阻尼。对应提升到 1200 以抑制过冲。
+     */
+    private static final double PITCH_SERVO_DAMPING = 1200.0;
+
+    /**
+     * 高低机最大转速（度/游戏刻），从 Config 的度/秒值自动换算。
+     */
+    private static double pitchSpeedPerTick() {
+        return Config.TURRET_PITCH_SPEED_DPS.get() / 20.0;
+    }
 
     // ==================================================================
-
     public TurretBaseBlockEntity(BlockPos pos, BlockState state) {
         super(ModBlockEntityTypes.TURRET_BASE.get(), pos, state);
     }
@@ -202,12 +260,13 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
     //  KineticBlockEntity 重写：位置模式 PD 伺服
     //  参考 SwivelBearingBlockEntity — 每 tick position-mode setMotor
     // ==================================================================
-
     @Override
     public void tick() {
         super.tick(); // KineticBlockEntity.tick() → SmartBlockEntity.tick()
 
-        if (level == null || level.isClientSide) return;
+        if (level == null || level.isClientSide) {
+            return;
+        }
 
         // 每 tick 更新方向机 PD 伺服（即使无目标也保持位置）
         if (assembled && swivelBearingHandle != null && swivelBearingHandle.isValid()) {
@@ -235,11 +294,13 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
      * 方向机位置模式 PD 伺服。
      * <p>
      * 每 tick 调用 setMotor(position mode)，与 SwivelBearing 完全相同的模式。
-     * 无目标时保持当前角度（targetAngleDegrees 不变 → 位置保持）。
-     * 有目标时由 AimController 增量调节 targetAngleDegrees → 平滑转动。
+     * 无目标时保持当前角度（targetAngleDegrees 不变 → 位置保持）。 有目标时由 AimController 增量调节
+     * targetAngleDegrees → 平滑转动。
      */
     private void updateYawServo() {
-        if (!assembled || swivelBearingHandle == null || !swivelBearingHandle.isValid()) return;
+        if (!assembled || swivelBearingHandle == null || !swivelBearingHandle.isValid()) {
+            return;
+        }
 
         // 用 angleLerp 做 partialTick 插值（与 SwivelBearing 一致）
         float goal = net.createmod.catnip.math.AngleHelper.rad(
@@ -248,10 +309,10 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
 
         swivelBearingHandle.setMotor(
                 dev.ryanhcode.sable.api.physics.constraint.rotary.RotaryConstraintHandle.DEFAULT_AXIS,
-                goal,           // 目标角度（弧度）
+                goal, // 目标角度（弧度）
                 SERVO_STIFFNESS, // kP — 位置刚度
-                SERVO_DAMPING,   // kD — 速度阻尼
-                false,           // position mode
+                SERVO_DAMPING, // kD — 速度阻尼
+                false, // position mode
                 0.0
         );
         swivelBearingHandle.setContactsEnabled(false);
@@ -261,14 +322,25 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
     }
 
     /**
-     * 设置绝对目标偏航角度（度），由 AimController 每 tick 覆写。
+     * 设置绝对目标偏航角度（度），由 AimController 每 tick 调用。
      * <p>
-     * 直接设为从当前姿态 + 误差算出的目标角度，不累积。
-     * 不归一化到 [0,360) —— 保持连续性，避免跨 0° 时走远路。
+     * 采用<b>限速轨迹规划</b>：不是直接覆写目标角度，而是每 tick 最多向目标 移动 {@link #yawSpeedPerTick()}
+     * 度，保证：
+     * <ul>
+     * <li>距离远时全速旋转</li>
+     * <li>最后 1 tick 精确到位，不超调</li>
+     * <li>避免 PD 伺服收到阶跃目标→惯性过冲</li>
+     * </ul>
+     * 角度差自动归一化到 [-180, 180]。
      */
     public void setTargetYawAbsolute(double degrees) {
         this.lastTargetAngleDegrees = this.targetAngleDegrees;
-        this.targetAngleDegrees = degrees;
+        double delta = degrees - this.targetAngleDegrees;
+        // 归一化到 [-180, 180]
+        delta = Math.IEEEremainder(delta, 360.0);
+        // 限速
+        double step = Math.copySign(Math.min(Math.abs(delta), yawSpeedPerTick()), delta);
+        this.targetAngleDegrees += step;
     }
 
     /**
@@ -281,7 +353,6 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
     // ==================================================================
     //  高低机（Pitch）位置模式 PD 伺服
     // ==================================================================
-
     /**
      * 高低机位置模式 PD 伺服。
      * <p>
@@ -289,7 +360,9 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
      * 无目标时保持当前俯仰角度（targetPitchAngleDegrees 不变 → 位置保持）。
      */
     private void updatePitchServo() {
-        if (!assembled || barrelPitchHandle == null || !barrelPitchHandle.isValid()) return;
+        if (!assembled || barrelPitchHandle == null || !barrelPitchHandle.isValid()) {
+            return;
+        }
 
         float goal = AngleHelper.rad(
                 AngleHelper.angleLerp(1.0f,
@@ -300,7 +373,7 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
                 goal,
                 PITCH_SERVO_STIFFNESS,
                 PITCH_SERVO_DAMPING,
-                false,  // position mode
+                false, // position mode
                 0.0
         );
         barrelPitchHandle.setContactsEnabled(false);
@@ -309,13 +382,17 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
     }
 
     /**
-     * 设置绝对目标俯仰角度（度），由 AimController 每 tick 覆写。
+     * 设置绝对目标俯仰角度（度），由 AimController 每 tick 调用。
      * <p>
+     * 与方向机相同：限速轨迹规划，每 tick 最多移动 {@link #pitchSpeedPerTick()} 度。
      * 正值 = 炮管上仰，负值 = 炮管下俯。
      */
     public void setTargetPitchAbsolute(double degrees) {
         this.lastTargetPitchAngleDegrees = this.targetPitchAngleDegrees;
-        this.targetPitchAngleDegrees = degrees;
+        double delta = degrees - this.targetPitchAngleDegrees;
+        delta = Math.IEEEremainder(delta, 360.0);
+        double step = Math.copySign(Math.min(Math.abs(delta), pitchSpeedPerTick()), delta);
+        this.targetPitchAngleDegrees += step;
     }
 
     /**
@@ -328,7 +405,6 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
     // ==================================================================
     //  装配 / 拆卸
     // ==================================================================
-
     /**
      * 装配：在底座附近找一个空位，生成一个包含原版砂轮的物理化 SubLevel。
      */
@@ -344,11 +420,20 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
 
         ServerLevel serverLevel = (ServerLevel) this.level;
         ServerSubLevelContainer container = (ServerSubLevelContainer) SubLevelContainer.getContainer(serverLevel);
-        if (container == null) { IACP.LOGGER.error("[TurretBase] SubLevelContainer 为空！"); return; }
+        if (container == null) {
+            IACP.LOGGER.error("[TurretBase] SubLevelContainer 为空！");
+            return;
+        }
         SubLevelPhysicsSystem physicsSystem = container.physicsSystem();
-        if (physicsSystem == null) { IACP.LOGGER.error("[TurretBase] physicsSystem 为空！"); return; }
+        if (physicsSystem == null) {
+            IACP.LOGGER.error("[TurretBase] physicsSystem 为空！");
+            return;
+        }
         PhysicsPipeline pipeline = physicsSystem.getPipeline();
-        if (pipeline == null) { IACP.LOGGER.error("[TurretBase] pipeline 为空！"); return; }
+        if (pipeline == null) {
+            IACP.LOGGER.error("[TurretBase] pipeline 为空！");
+            return;
+        }
 
         // 判断地毯是否在物理结构（SubLevel）上
         SubLevel containingSubLevel = Sable.HELPER.getContaining(this);
@@ -389,7 +474,6 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
 
         // 炮管（避雷针）不再需要独立空位——将与砂轮在同一位置叠加，
         // 通过 RotaryConstraint（X 轴俯仰）绑定到砂轮上，形成炮塔总成
-
         Quaterniond identity = new Quaterniond();
 
         // ================================================================
@@ -474,8 +558,8 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
                 ).add(ANCHOR_VEHICLE_X, ANCHOR_VEHICLE_Y, ANCHOR_VEHICLE_Z);
                 RotaryConstraintConfiguration rotaryConfig = new RotaryConstraintConfiguration(
                         pos1, pos2,
-                        new Vector3d(0, 1, 0),  // normal1: 砂轮端旋转轴
-                        new Vector3d(0, 1, 0)   // normal2: 载具端旋转轴
+                        new Vector3d(0, 1, 0), // normal1: 砂轮端旋转轴
+                        new Vector3d(0, 1, 0) // normal2: 载具端旋转轴
                 );
                 this.swivelBearingHandle = pipeline.addConstraint(grindstoneSL, vehicleSL, rotaryConfig);
                 this.swivelBearingHandle.setContactsEnabled(false);  // 禁用碰撞，砂轮穿过载具
@@ -617,7 +701,9 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
         try {
             ServerLevel serverLevel = (ServerLevel) this.level;
             ServerSubLevelContainer container = (ServerSubLevelContainer) SubLevelContainer.getContainer(serverLevel);
-            if (container == null) return;
+            if (container == null) {
+                return;
+            }
 
             // 先移除所有约束（必须在移除 SubLevel 之前）
             removeConstraint(this.barrelPitchHandle);
@@ -663,37 +749,48 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
     // ==================================================================
     //  公共接口（供网络包调用）
     // ==================================================================
-
-    /** 返回砂轮 SubLevel 的 UUID */
+    /**
+     * 返回砂轮 SubLevel 的 UUID
+     */
     @Nullable
     public UUID getGrindstoneSubLevelId() {
         return this.grindstoneSubLevelId;
     }
 
-    /** 返回车体 SubLevel 的 UUID（用于瞄准局部坐标系稳定），null = 放在主世界 */
+    /**
+     * 返回车体 SubLevel 的 UUID（用于瞄准局部坐标系稳定），null = 放在主世界
+     */
     @Nullable
     public UUID getVehicleSubLevelId() {
         return this.vehicleSubLevelId;
     }
 
-    /** 返回方向机旋转轴承句柄（砂轮↔载具 RotaryConstraint），供 TurretAimController 驱动 Y 轴旋转 */
+    /**
+     * 返回方向机旋转轴承句柄（砂轮↔载具 RotaryConstraint），供 TurretAimController 驱动 Y 轴旋转
+     */
     @Nullable
     public PhysicsConstraintHandle getSwivelBearingHandle() {
         return this.swivelBearingHandle;
     }
 
-    /** 返回高低机俯仰约束句柄（避雷针↔砂轮 GenericConstraint），供 TurretAimController 驱动 X 轴俯仰 */
+    /**
+     * 返回高低机俯仰约束句柄（避雷针↔砂轮 GenericConstraint），供 TurretAimController 驱动 X 轴俯仰
+     */
     @Nullable
     public PhysicsConstraintHandle getBarrelPitchHandle() {
         return this.barrelPitchHandle;
     }
 
-    /** 获取锚点坐标（副本） */
+    /**
+     * 获取锚点坐标（副本）
+     */
     public double[] getAnchor() {
         return new double[]{this.anchorX, this.anchorY, this.anchorZ};
     }
 
-    /** 设置锚点坐标并同步到客户端 */
+    /**
+     * 设置锚点坐标并同步到客户端
+     */
     public void setAnchor(double x, double y, double z) {
         this.anchorX = x;
         this.anchorY = y;
@@ -708,11 +805,15 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
      * 将锚点数据和线条数据通过专用 S2C 包推送到客户端。
      */
     private void sendAnchorDataToClients() {
-        if (this.level == null || this.level.isClientSide || this.grindstoneSubLevelId == null) return;
+        if (this.level == null || this.level.isClientSide || this.grindstoneSubLevelId == null) {
+            return;
+        }
         try {
             ServerLevel serverLevel = (ServerLevel) this.level;
             ServerSubLevelContainer container = (ServerSubLevelContainer) SubLevelContainer.getContainer(serverLevel);
-            if (container == null) return;
+            if (container == null) {
+                return;
+            }
             ServerSubLevel sub = (ServerSubLevel) container.getSubLevel(this.grindstoneSubLevelId);
             if (sub == null || sub.isRemoved()) {
                 // SubLevel 不可用，只发锚点数据（线条设为原点）
@@ -742,7 +843,9 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
         }
     }
 
-    /** 当 SubLevel 不可用时，只发送锚点坐标，线条全零 */
+    /**
+     * 当 SubLevel 不可用时，只发送锚点坐标，线条全零
+     */
     private void sendAnchorOnly(ServerLevel serverLevel) {
         AnchorDataS2CPacket packet = new AnchorDataS2CPacket(
                 this.grindstoneSubLevelId,
@@ -753,7 +856,9 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
                 new ChunkPos(this.worldPosition), packet);
     }
 
-    /** 返回避雷针 SubLevel 的 UUID */
+    /**
+     * 返回避雷针 SubLevel 的 UUID
+     */
     @Nullable
     public UUID getLightningRodSubLevelId() {
         return this.lightningRodSubLevelId;
@@ -763,16 +868,24 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
      * 更改避雷针的朝向。
      */
     public void setLightningRodFacing(Direction facing) {
-        if (this.lightningRodSubLevelId == null || this.level == null || this.level.isClientSide) return;
+        if (this.lightningRodSubLevelId == null || this.level == null || this.level.isClientSide) {
+            return;
+        }
         try {
             ServerLevel serverLevel = (ServerLevel) this.level;
             ServerSubLevelContainer container = (ServerSubLevelContainer) SubLevelContainer.getContainer(serverLevel);
-            if (container == null) return;
+            if (container == null) {
+                return;
+            }
             ServerSubLevel subLevel = (ServerSubLevel) container.getSubLevel(this.lightningRodSubLevelId);
-            if (subLevel == null || subLevel.isRemoved()) return;
+            if (subLevel == null || subLevel.isRemoved()) {
+                return;
+            }
 
             LevelPlot plot = subLevel.getPlot();
-            if (plot == null) return;
+            if (plot == null) {
+                return;
+            }
 
             BlockState newState = Blocks.LIGHTNING_ROD.defaultBlockState()
                     .setValue(net.minecraft.world.level.block.LightningRodBlock.FACING, facing)
@@ -788,16 +901,24 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
      * 更改砂轮的朝向。
      */
     public void setGrindstoneFacing(Direction facing) {
-        if (this.grindstoneSubLevelId == null || this.level == null || this.level.isClientSide) return;
+        if (this.grindstoneSubLevelId == null || this.level == null || this.level.isClientSide) {
+            return;
+        }
         try {
             ServerLevel serverLevel = (ServerLevel) this.level;
             ServerSubLevelContainer container = (ServerSubLevelContainer) SubLevelContainer.getContainer(serverLevel);
-            if (container == null) return;
+            if (container == null) {
+                return;
+            }
             ServerSubLevel subLevel = (ServerSubLevel) container.getSubLevel(this.grindstoneSubLevelId);
-            if (subLevel == null || subLevel.isRemoved()) return;
+            if (subLevel == null || subLevel.isRemoved()) {
+                return;
+            }
 
             LevelPlot plot = subLevel.getPlot();
-            if (plot == null) return;
+            if (plot == null) {
+                return;
+            }
 
             BlockState newState = Blocks.GRINDSTONE.defaultBlockState()
                     .setValue(net.minecraft.world.level.block.GrindstoneBlock.FACING, facing);
@@ -811,10 +932,13 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
     // ==================================================================
     //  私有工具方法
     // ==================================================================
-
-    /** 安全移除约束 */
+    /**
+     * 安全移除约束
+     */
     private static void removeConstraint(@Nullable PhysicsConstraintHandle handle) {
-        if (handle == null) return;
+        if (handle == null) {
+            return;
+        }
         try {
             if (handle.isValid()) {
                 handle.remove();
@@ -828,7 +952,9 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
      * 根据 UUID 移除 SubLevel（安全，处理 null 和已移除的情况）。
      */
     private static void removeSubLevelById(ServerSubLevelContainer container, @Nullable UUID uuid) {
-        if (uuid == null) return;
+        if (uuid == null) {
+            return;
+        }
         try {
             ServerSubLevel subLevel = (ServerSubLevel) container.getSubLevel(uuid);
             if (subLevel != null && !subLevel.isRemoved()) {
@@ -842,7 +968,6 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
     // ==================================================================
     //  工具方法
     // ==================================================================
-
     public boolean isAssembled() {
         return this.assembled;
     }
@@ -905,7 +1030,6 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
     // ==================================================================
     //  NBT 持久化
     // ==================================================================
-
     @Override
     protected void write(CompoundTag tag, HolderLookup.Provider registries, boolean clientPacket) {
         super.write(tag, registries, clientPacket);
@@ -937,10 +1061,18 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
                         var x = pose.transformPosition(new Vector3d(anchorX + 20, anchorY, anchorZ));
                         var y = pose.transformPosition(new Vector3d(anchorX, anchorY + 20, anchorZ));
                         var z = pose.transformPosition(new Vector3d(anchorX, anchorY, anchorZ + 20));
-                        tag.putDouble("LOX", o.x); tag.putDouble("LOY", o.y); tag.putDouble("LOZ", o.z);
-                        tag.putDouble("LXX", x.x); tag.putDouble("LXY", x.y); tag.putDouble("LXZ", x.z);
-                        tag.putDouble("LYX", y.x); tag.putDouble("LYY", y.y); tag.putDouble("LYZ", y.z);
-                        tag.putDouble("LZX", z.x); tag.putDouble("LZY", z.y); tag.putDouble("LZZ", z.z);
+                        tag.putDouble("LOX", o.x);
+                        tag.putDouble("LOY", o.y);
+                        tag.putDouble("LOZ", o.z);
+                        tag.putDouble("LXX", x.x);
+                        tag.putDouble("LXY", x.y);
+                        tag.putDouble("LXZ", x.z);
+                        tag.putDouble("LYX", y.x);
+                        tag.putDouble("LYY", y.y);
+                        tag.putDouble("LYZ", y.z);
+                        tag.putDouble("LZX", z.x);
+                        tag.putDouble("LZY", z.y);
+                        tag.putDouble("LZZ", z.z);
                     }
                 }
             }
@@ -978,10 +1110,10 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
                     new double[]{anchorX, anchorY, anchorZ});
             if (tag.contains("LOX")) {
                 GRINDSTONE_LINE_CACHE.put(this.grindstoneSubLevelId, new double[]{
-                        tag.getDouble("LOX"), tag.getDouble("LOY"), tag.getDouble("LOZ"),
-                        tag.getDouble("LXX"), tag.getDouble("LXY"), tag.getDouble("LXZ"),
-                        tag.getDouble("LYX"), tag.getDouble("LYY"), tag.getDouble("LYZ"),
-                        tag.getDouble("LZX"), tag.getDouble("LZY"), tag.getDouble("LZZ")
+                    tag.getDouble("LOX"), tag.getDouble("LOY"), tag.getDouble("LOZ"),
+                    tag.getDouble("LXX"), tag.getDouble("LXY"), tag.getDouble("LXZ"),
+                    tag.getDouble("LYX"), tag.getDouble("LYY"), tag.getDouble("LYZ"),
+                    tag.getDouble("LZX"), tag.getDouble("LZY"), tag.getDouble("LZZ")
                 });
             }
         }
@@ -1027,13 +1159,18 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
     /**
      * 重建约束（世界重载/断线重连后使用）。
      * <p>
-     * 从 NBT 恢复的 UUID 重新找到 SubLevel 并建立约束关系。
-     * 约束参数与 {@link #assemble()} 中完全一致。
+     * 从 NBT 恢复的 UUID 重新找到 SubLevel 并建立约束关系。 约束参数与 {@link #assemble()} 中完全一致。
      */
     private void reestablishConstraints() {
-        if (this.level == null || this.level.isClientSide) return;
-        if (!this.assembled) return;
-        if (this.grindstoneSubLevelId == null) return;
+        if (this.level == null || this.level.isClientSide) {
+            return;
+        }
+        if (!this.assembled) {
+            return;
+        }
+        if (this.grindstoneSubLevelId == null) {
+            return;
+        }
 
         IACP.LOGGER.info("[TurretBase] ====== 重建约束 @ {} ======", this.worldPosition);
 
@@ -1052,7 +1189,9 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
             }
 
             PhysicsPipeline pipeline = container.physicsSystem().getPipeline();
-            if (pipeline == null) return;
+            if (pipeline == null) {
+                return;
+            }
 
             // 寻找载具 SubLevel
             ServerSubLevel vehicleSL = null;

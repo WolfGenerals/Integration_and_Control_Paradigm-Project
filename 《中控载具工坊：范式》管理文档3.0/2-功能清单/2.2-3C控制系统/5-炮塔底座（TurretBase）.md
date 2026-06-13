@@ -90,7 +90,8 @@ TurretBaseBE.updateYawServo()（每 server tick）:
 | I | 扭矩脉冲 / 基础 PD / 角速度 P 控制 | ❌ | forward 方向 Bug + setMotor 不响应 |
 | II | 速度伺服 + SNAP teleport | ❌ 到位不稳 | solver substep 过冲 |
 | III | 抽象齿轮模式（RPM → 角度累积 → PD） | ❌ 震荡 | RPM 是阶跃变化，开环+闭环=双重积分器 |
-| **IV** | **位置模式 PD 伺服（SwivelBearing 模式）** | **✅ 稳定** | **放弃 RPM 累积，直接 position-mode** |
+| IV | 位置模式 PD 伺服（SwivelBearing 模式） | ✅ 稳定 | 放弃 RPM 累积，直接 position-mode |
+| **V** | **限速轨迹 + 超高刚度 PD** | **✅ 瞬停无过冲** | **06-13：限速 + kP×1000 暴力抑制惯性** |
 
 ### 关键诊断发现
 
@@ -104,14 +105,17 @@ TurretBaseBE.updateYawServo()（每 server tick）:
 
 | 参数 | 值 | 说明 |
 |------|:---:|------|
-| SERVO_STIFFNESS | 200.0 | PD 刚度（位置模式） |
-| SERVO_DAMPING | 16.0 | PD 阻尼 |
-| YAW_GAIN | 80.0 | 比例增益 |
+| SERVO_STIFFNESS | 200000.0 | 方向机 PD 刚度（06-13 从 200 提升 1000×）|
+| SERVO_DAMPING | 50.0 | 方向机 PD 阻尼 |
+| PITCH_SERVO_STIFFNESS | 600000.0 | 高低机 PD 刚度（06-13 从 6000 提升 1000×）|
+| PITCH_SERVO_DAMPING | 1200.0 | 高低机 PD 阻尼 |
 | YAW_DEAD | 0.5° | 到位死区 |
 | PITCH_DEAD | 0.5° | 俯仰死区 |
 | PITCH_CLAMP | 60° | 俯仰最大角 |
 | MAX_RAY_DISTANCE | 1000 格 | 射线最大距离 |
 | TURRET_YAW_OFFSET | configurable | 偏航校准（-180~180°）|
+| TURRET_YAW_SPEED_DPS | configurable（默认 90°/s） | 方向机最大转速 |
+| TURRET_PITCH_SPEED_DPS | configurable（默认 40°/s） | 高低机最大转速 |
 
 ### 坐标镜像（重要！）
 
@@ -148,19 +152,49 @@ double targetYawRad = -(currentYawRad + yawErr) + offsetRad;
 - 每 tick 打印 `[DebugGear] speed/angular/RPM`
 - **诊断结论**：Create RPM 阶跃变化
 
+### 限速轨迹规划（06-13 新增）
+
+**核心改进**：在 `TurretBaseBlockEntity.setTargetYawAbsolute()` / `setTargetPitchAbsolute()` 中
+加入限速逻辑，防止 AimController 输出的目标角度阶跃变化导致 PD 过冲。
+
+```java
+delta = degrees - this.targetAngleDegrees;
+delta = Math.IEEEremainder(delta, 360.0);  // 归一化 [-180, 180]
+double step = Math.copySign(Math.min(Math.abs(delta), maxStep), delta);
+this.targetAngleDegrees += step;           // 每 tick 限速推进
+```
+
+**效果**：
+- 距离远时全速旋转（maxStep 由 Config °/s ÷ 20 换算）
+- 最后 1 tick 精确到位、不超调
+- 配合超高刚度 PD（kP=200000），实现物理引擎瞬停
+
+### 超高刚度 PD 发现（06-13）
+
+通过 DebugSwivelBearing 测试发现，SwivelBearing 在重载下仍能瞬间刹停，
+证明 PD 伺服本身不存在问题。炮塔过冲的根因是目标角度阶跃变化，而非 PD 参数。
+
+**解决方案**（非常规但有效）：
+1. 限速轨迹规划消除目标阶跃
+2. 暴力提升 kP 至 200000（方向机）/ 600000（高低机）
+3. kD 相应提升至 50 / 1200
+
+**副作用**：极高刚度可能导致与其他约束交互时物理不稳定，但实测中未出现。
+
 ### 可配置校准
 `Config.java` `[turret.aim]` 节：
 ```toml
-yawOffset = 0.0  # 范围 -180~180°，默认 0°
+yawOffset = 0.0      # 范围 -180~180°，默认 0°
+yawSpeedDPS = 90.0   # 方向机最大转速（度/秒）
+pitchSpeedDPS = 40.0 # 高低机最大转速（度/秒）
 ```
-用于补偿炮塔瞄准位置与实际位置的固定角度偏差。
 
-### 高低机控制（位置模式 PD 伺服 ✅ 06-11 已完成）
+### 高低机控制（位置模式 PD 伺服 ✅ 06-13 完成）
 - GenericConstraint 锁定 `LINEAR_XYZ + ANGULAR_YZ`，保留 `ANGULAR_X` 自由
 - 避雷针绕局部 X 轴俯仰
-- **当前**：与方向机相同的位置模式 PD 伺服（`PITCH_SERVO_STIFFNESS=6000`, `PITCH_SERVO_DAMPING=400`）
-- 每 tick 调用 `setMotor(ANGULAR_X, goal, 6000, 400, false, 0)`，与方向机统一 position-mode
-- 高刚度（×6相比方向机）以对抗悬臂重力矩，减少稳态下垂
+- 与方向机统一 position-mode，每 tick `setMotor(ANGULAR_X, goal, kP, kD, false, 0)`
+- 06-13 更新：`PITCH_SERVO_STIFFNESS=600000`, `PITCH_SERVO_DAMPING=1200`（与方向机同比例 ×1000）
+- 同样加入限速轨迹规划，最大俯仰速度默认为 40°/s（Config 可调）
 
 ### 已解决问题的完整列表
 1. ~~**forward 方向错误** — (0,1,0)=UP → (0,0,1) Z 轴正向~~ ✅

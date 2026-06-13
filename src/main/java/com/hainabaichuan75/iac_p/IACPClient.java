@@ -21,6 +21,7 @@ import net.neoforged.neoforge.common.NeoForge;
 
 @Mod(value = IACP.MODID, dist = Dist.CLIENT)
 public class IACPClient {
+
     public IACPClient(ModContainer container, IEventBus modEventBus) {
         container.registerExtensionPoint(IConfigScreenFactory.class, ConfigurationScreen::new);
 
@@ -45,7 +46,6 @@ public class IACPClient {
         event.register(ClientEvents.getVehicleConfigKey());
         event.register(ClientEvents.getRaycastFireKey());
         event.register(ClientEvents.getDebugGearKey());
-        event.register(ClientEvents.getDebugSubLevelHitKey());
     }
 
     private void registerRenderers(EntityRenderersEvent.RegisterRenderers event) {

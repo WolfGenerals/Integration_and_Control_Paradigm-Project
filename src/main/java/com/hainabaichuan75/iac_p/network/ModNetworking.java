@@ -2,6 +2,7 @@ package com.hainabaichuan75.iac_p.network;
 
 import com.hainabaichuan75.iac_p.IACP;
 import com.hainabaichuan75.iac_p.network.packets.DebugGearToggleC2SPacket;
+import com.hainabaichuan75.iac_p.network.packets.DebugSwivelToggleC2SPacket;
 import com.hainabaichuan75.iac_p.network.packets.GearShiftC2SPacket;
 import com.hainabaichuan75.iac_p.network.packets.MountedStateS2CPacket;
 import com.hainabaichuan75.iac_p.network.packets.PlayerInputC2SPacket;
@@ -90,6 +91,11 @@ public class ModNetworking {
                 DebugGearToggleC2SPacket.TYPE,
                 DebugGearToggleC2SPacket.STREAM_CODEC,
                 DebugGearToggleC2SPacket::handle
+        );
+        registrar.playToServer(
+                DebugSwivelToggleC2SPacket.TYPE,
+                DebugSwivelToggleC2SPacket.STREAM_CODEC,
+                DebugSwivelToggleC2SPacket::handle
         );
         registrar.playToServer(
                 WeaponFireC2SPacket.TYPE,

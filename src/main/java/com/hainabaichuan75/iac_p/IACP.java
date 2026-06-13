@@ -8,6 +8,7 @@ import com.hainabaichuan75.iac_p.index.ModBlocks;
 import com.hainabaichuan75.iac_p.index.ModCockpitBlockEntityTypes;
 import com.hainabaichuan75.iac_p.index.ModCreativeModeTabs;
 import com.hainabaichuan75.iac_p.index.ModDebugGearBlockEntityTypes;
+import com.hainabaichuan75.iac_p.index.ModDebugSwivelBearingBlockEntityTypes;
 import com.hainabaichuan75.iac_p.index.ModEntities;
 import com.hainabaichuan75.iac_p.index.ModItems;
 import org.slf4j.Logger;
@@ -22,6 +23,7 @@ import net.neoforged.neoforge.common.NeoForge;
 
 @Mod(IACP.MODID)
 public class IACP {
+
     public static final String MODID = "iac_p";
     public static final Logger LOGGER = LogUtils.getLogger();
 
@@ -35,6 +37,7 @@ public class IACP {
         ModBlockEntityTypes.BLOCK_ENTITY_TYPES.register(modEventBus);
         ModCockpitBlockEntityTypes.BLOCK_ENTITY_TYPES.register(modEventBus);
         ModDebugGearBlockEntityTypes.BLOCK_ENTITY_TYPES.register(modEventBus);
+        ModDebugSwivelBearingBlockEntityTypes.BLOCK_ENTITY_TYPES.register(modEventBus);
         ModCreativeModeTabs.register(modEventBus);
 
         // 将服务端事件处理器注册到游戏总线（替代弃用的 @EventBusSubscriber(bus = Bus.GAME)）

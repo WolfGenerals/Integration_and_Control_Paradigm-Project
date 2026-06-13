@@ -4,6 +4,7 @@ import com.hainabaichuan75.iac_p.IACP;
 import com.hainabaichuan75.iac_p.content.blocks.cockpit.CockpitBlock;
 import com.hainabaichuan75.iac_p.content.blocks.cockpit.CockpitUpperBlock;
 import com.hainabaichuan75.iac_p.content.blocks.debug_gear.DebugGearBlock;
+import com.hainabaichuan75.iac_p.content.blocks.debug_swivel.DebugSwivelBearingBlock;
 import com.hainabaichuan75.iac_p.content.blocks.seat.SeatBlock;
 import com.hainabaichuan75.iac_p.content.blocks.suspension_test.SuspensionTestBlock;
 import com.hainabaichuan75.iac_p.content.blocks.turret.TurretBaseBlock;
@@ -14,6 +15,7 @@ import net.neoforged.neoforge.registries.DeferredBlock;
 import net.neoforged.neoforge.registries.DeferredRegister;
 
 public class ModBlocks {
+
     public static final DeferredRegister.Blocks BLOCKS = DeferredRegister.createBlocks(IACP.MODID);
 
     // === 旧核心（保留作为模板） ===
@@ -24,7 +26,9 @@ public class ModBlocks {
                     .noOcclusion());
 
     // === 通用驾驶舱（多方块结构，下格 + 上格） ===
-    /** 驾驶舱下半部分（炼药锅形状） */
+    /**
+     * 驾驶舱下半部分（炼药锅形状）
+     */
     public static final DeferredBlock<CockpitBlock> COCKPIT = BLOCKS.registerBlock("cockpit",
             CockpitBlock::new,
             BlockBehaviour.Properties.of()
@@ -32,7 +36,9 @@ public class ModBlocks {
                     .sound(SoundType.METAL)
                     .noOcclusion());
 
-    /** 驾驶舱上半部分（脚手架形状），无对应物品，由 COCKPIT 放置时自动生成 */
+    /**
+     * 驾驶舱上半部分（脚手架形状），无对应物品，由 COCKPIT 放置时自动生成
+     */
     public static final DeferredBlock<CockpitUpperBlock> COCKPIT_UPPER = BLOCKS.registerBlock("cockpit_upper",
             CockpitUpperBlock::new,
             BlockBehaviour.Properties.of()
@@ -64,5 +70,13 @@ public class ModBlocks {
             BlockBehaviour.Properties.of()
                     .strength(1.5f, 6.0f)
                     .sound(SoundType.WOOD)
+                    .noOcclusion());
+
+    // === 调试 SwivelBearing 监视方块 ===
+    public static final DeferredBlock<DebugSwivelBearingBlock> DEBUG_SWIVEL_BEARING = BLOCKS.registerBlock("debug_swivel_bearing",
+            DebugSwivelBearingBlock::new,
+            BlockBehaviour.Properties.of()
+                    .strength(1.5f, 6.0f)
+                    .sound(SoundType.METAL)
                     .noOcclusion());
 }
