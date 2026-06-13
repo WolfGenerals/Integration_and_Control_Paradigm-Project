@@ -5,6 +5,7 @@
   "block.iac_p.turret_base": "炮塔底座",
   "block.iac_p.suspension_test": "悬挂测试方块",
   "block.iac_p.debug_gear": "调试齿轮",
+  "block.iac_p.debug_swivel_bearing": "调试 SwivelBearing",
 
   "key.category.iac_p": "中控载具工坊：范式",
   "key.iac_p.mount": "上车 / 下车",
@@ -12,7 +13,6 @@
   "key.iac_p.raycast_fire": "射线检测 / 开火",
   "key.iac_p.weapon_fire": "武器开火",
   "key.iac_p.debug_gear": "调试齿轮开关",
-  "key.iac_p.debug_sublevel_hit": "SubLevel 命中调试测试 (P)",
 
   "message.iac_p.cockpit_incomplete": "该驾驶舱不可用",
   "message.iac_p.multiple_cockpits": "请移除多余驾驶舱结构",
@@ -20,7 +20,8 @@
 
   "message.iac_p.turret_not_found": "§c[炮塔] 未找到已装配的炮塔底座",
   "message.iac_p.debug_gear_toggled": "§e[DebugGear] §a已切换调试输出",
-  "message.iac_p.debug_gear_not_target": "§e[DebugGear] §7目标不是调试齿轮",
+  "message.iac_p.debug_gear_not_target": "§e[DebugGear] §7目标不是调试方块",
+  "message.iac_p.debug_swivel_toggled": "§e[DebugSwivel] §a已切换调试输出",
   "message.iac_p.fire_hit": "§c[开火] §f%s §7(%.0f m)",
   "message.iac_p.raycast_hit": "§7[射线] %s @ %.0f m",
   "message.iac_p.raycast_miss": "§7[射线] §c未命中 (%s)",

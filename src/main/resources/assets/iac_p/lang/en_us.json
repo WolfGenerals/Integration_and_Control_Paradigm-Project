@@ -5,6 +5,7 @@
   "block.iac_p.turret_base": "Turret Base",
   "block.iac_p.suspension_test": "Suspension Test Block",
   "block.iac_p.debug_gear": "Debug Gear",
+  "block.iac_p.debug_swivel_bearing": "Debug SwivelBearing",
 
   "key.category.iac_p": "IAC-P",
   "key.iac_p.mount": "Mount / Dismount",
@@ -12,7 +13,6 @@
   "key.iac_p.raycast_fire": "Raycast / Fire",
   "key.iac_p.weapon_fire": "Fire Weapon",
   "key.iac_p.debug_gear": "Debug Gear Toggle",
-  "key.iac_p.debug_sublevel_hit": "SubLevel Hit Debug Test (P)",
 
   "message.iac_p.cockpit_incomplete": "This cockpit is not available",
   "message.iac_p.multiple_cockpits": "Please remove extra cockpit structures",
@@ -20,7 +20,8 @@
 
   "message.iac_p.turret_not_found": "§c[Turret] No assembled turret base found",
   "message.iac_p.debug_gear_toggled": "§e[DebugGear] §aToggled debug output",
-  "message.iac_p.debug_gear_not_target": "§e[DebugGear] §7Target is not a Debug Gear",
+  "message.iac_p.debug_gear_not_target": "§e[DebugGear] §7Target is not a debug block",
+  "message.iac_p.debug_swivel_toggled": "§e[DebugSwivel] §aToggled debug output",
   "message.iac_p.fire_hit": "§c[Fire] §f%s §7(%.0f m)",
   "message.iac_p.raycast_hit": "§7[Ray] %s @ %.0f m",
   "message.iac_p.raycast_miss": "§7[Ray] §cMiss (%s)",
