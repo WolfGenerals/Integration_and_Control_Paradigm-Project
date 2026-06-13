@@ -36,3 +36,4 @@
 | 29 | [炮塔位置模式 PD 伺服（SwivelBearing 模式）](29-炮塔位置模式PD伺服（SwivelBearing模式）.md) | 位置模式, setMotor, PD伺服, RotaryConstraint |
 | 30 | [Sable API 查询方式：Vector3dc vs SubLevel 遍历](30-SableAPI查询方式：Vector3dc%20vs%20SubLevel遍历.md) | getContaining, SubLevelContainer, SubLevelAccess, BlockPos | 
 | 31 | [SubLevel 射线追踪与归属管理](31-SubLevel射线追踪与归属管理.md) | rayTraceSubLevels, SubLevelOwnership, reestablishConstraints, clipSubLevelsInner |
+| 32 | [下车坐标系：玩家位置 vs SubLevel 底层坐标](32-下车坐标系：玩家位置vsSubLevel底层坐标.md) | player.position, logicalPose.transformPosition, world-space, directTopPosition |
