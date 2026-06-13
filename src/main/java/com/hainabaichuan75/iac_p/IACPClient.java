@@ -45,6 +45,7 @@ public class IACPClient {
         event.register(ClientEvents.getVehicleConfigKey());
         event.register(ClientEvents.getRaycastFireKey());
         event.register(ClientEvents.getDebugGearKey());
+        event.register(ClientEvents.getDebugSubLevelHitKey());
     }
 
     private void registerRenderers(EntityRenderersEvent.RegisterRenderers event) {

@@ -2,6 +2,7 @@ package com.hainabaichuan75.iac_p;
 
 import com.hainabaichuan75.iac_p.events.MountedProtectionHandler;
 import com.hainabaichuan75.iac_p.events.PlayerMountTracker;
+import com.hainabaichuan75.iac_p.events.SubLevelProjectileHandler;
 import com.hainabaichuan75.iac_p.index.ModBlockEntityTypes;
 import com.hainabaichuan75.iac_p.index.ModBlocks;
 import com.hainabaichuan75.iac_p.index.ModCockpitBlockEntityTypes;
@@ -40,5 +41,7 @@ public class IACP {
         NeoForge.EVENT_BUS.register(PlayerMountTracker.class);
         // 骑乘保护处理器：伤害免疫 + 仇恨屏蔽
         NeoForge.EVENT_BUS.register(MountedProtectionHandler.class);
+        // 部件损坏系统：外部弹射物命中 SubLevel 方块
+        NeoForge.EVENT_BUS.register(SubLevelProjectileHandler.class);
     }
 }

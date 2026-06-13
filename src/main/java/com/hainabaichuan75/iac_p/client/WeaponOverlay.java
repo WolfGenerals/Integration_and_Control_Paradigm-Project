@@ -140,9 +140,9 @@ public class WeaponOverlay {
                         // 从炮口沿炮管方向做射线检测
                         Vec3 hitPos = raycastGeneric(mc, origin, dir, MAX_RAY_DISTANCE, mountedUUID, rodId);
 
-                        // 存储弹道数据 + 发送伤害数据包
+                        // 存储弹道数据 + 发送伤害数据包（含射线起点，供服务端做完整射线追踪）
                         activeFires.add(new TurretFireInstance(origin, hitPos));
-                        ModNetworking.sendToServer(new WeaponFireC2SPacket(hitPos.x, hitPos.y, hitPos.z));
+                        ModNetworking.sendToServer(new WeaponFireC2SPacket(origin.x, origin.y, origin.z, hitPos.x, hitPos.y, hitPos.z));
                     }
                 }
             }
