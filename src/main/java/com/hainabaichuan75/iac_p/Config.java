@@ -3,6 +3,7 @@ package com.hainabaichuan75.iac_p;
 import net.neoforged.neoforge.common.ModConfigSpec;
 
 public class Config {
+
     private static final ModConfigSpec.Builder BUILDER = new ModConfigSpec.Builder();
 
     // ====== 客户端摄像机配置 ======
@@ -105,7 +106,6 @@ public class Config {
     }
 
     // ====== 炮塔约束锚点偏移配置项 ======
-
     // 避雷针(炮管)端约束锚点偏移
     public static final ModConfigSpec.DoubleValue ROD_ANCHOR_OFFSET_X;
     public static final ModConfigSpec.DoubleValue ROD_ANCHOR_OFFSET_Y;
@@ -129,6 +129,16 @@ public class Config {
     // ====== 炮塔瞄准校准 ======
     public static final ModConfigSpec.DoubleValue TURRET_YAW_OFFSET;
 
+    /**
+     * 方向机最大转速（度/秒），代码自动 ÷20 换算为每游戏刻限速
+     */
+    public static final ModConfigSpec.DoubleValue TURRET_YAW_SPEED_DPS;
+
+    /**
+     * 高低机最大转速（度/秒），俯仰比偏航慢，默认 40°/s
+     */
+    public static final ModConfigSpec.DoubleValue TURRET_PITCH_SPEED_DPS;
+
     static {
         BUILDER.push("turret").push("aim");
         TURRET_YAW_OFFSET = BUILDER
@@ -137,6 +147,16 @@ public class Config {
                         "通过此值校准。正值使炮塔顺时针偏转，负值逆时针。",
                         "建议在游戏中微调：先瞄准一个目标，测量偏差角度，填入此值。")
                 .defineInRange("yawOffset", 0.0, -180.0, 180.0);
+        TURRET_YAW_SPEED_DPS = BUILDER
+                .comment("方向机最大转速（度/秒）。",
+                        "默认 90 = 每秒转 90°。调大 = 炮塔转更快。",
+                        "换算关系：每游戏刻限速 = 该值 ÷ 20")
+                .defineInRange("yawSpeedDPS", 90.0, 1.0, 3600.0);
+        TURRET_PITCH_SPEED_DPS = BUILDER
+                .comment("高低机最大转速（度/秒）。",
+                        "默认 40 = 每秒俯仰 40°。一般比方向机慢。",
+                        "换算关系：每游戏刻限速 = 该值 ÷ 20")
+                .defineInRange("pitchSpeedDPS", 40.0, 1.0, 1800.0);
         BUILDER.pop().pop();
     }
 
