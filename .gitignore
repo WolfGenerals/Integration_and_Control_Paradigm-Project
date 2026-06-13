@@ -9,6 +9,7 @@ tmp_*/
 tmp_classes/
 tmp_decompile/
 gradle_build.log
+build_err.txt
 *.log
 
 ### Decompiled third-party class files (never commit bytecode) ###
