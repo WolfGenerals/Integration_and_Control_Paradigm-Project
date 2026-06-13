@@ -8,6 +8,7 @@ import com.hainabaichuan75.iac_p.content.blocks.debug_gear.DebugGearBlock;
 import com.hainabaichuan75.iac_p.content.blocks.suspension_test.SuspensionTestBlock;
 import com.hainabaichuan75.iac_p.content.blocks.suspension_test.SuspensionTestBlockEntity;
 import com.hainabaichuan75.iac_p.IACP;
+import com.hainabaichuan75.iac_p.events.SableBlockHelper;
 import com.hainabaichuan75.iac_p.network.ModNetworking;
 import com.hainabaichuan75.iac_p.network.packets.DebugGearToggleC2SPacket;
 import com.hainabaichuan75.iac_p.network.packets.GearShiftC2SPacket;
@@ -61,6 +62,7 @@ public class ClientEvents {
     private static final String KEY_VEHICLE_CONFIG = "key.iac_p.vehicle_config";
     private static final String KEY_RAYCAST_FIRE = "key.iac_p.raycast_fire";
     private static final String KEY_DEBUG_GEAR = "key.iac_p.debug_gear";
+    private static final String KEY_DEBUG_SUBLEVEL_HIT = "key.iac_p.debug_sublevel_hit";
 
     private static final Lazy<KeyMapping> MOUNT_KEY = Lazy.of(() -> new KeyMapping(
             KEY_MOUNT,
@@ -91,6 +93,15 @@ public class ClientEvents {
             KeyConflictContext.IN_GAME,
             com.mojang.blaze3d.platform.InputConstants.Type.KEYSYM,
             GLFW.GLFW_KEY_N,
+            KEY_CATEGORY
+    ));
+
+    /** P 键：SubLevel 命中调试测试 */
+    private static final Lazy<KeyMapping> DEBUG_SUBLEVEL_HIT_KEY = Lazy.of(() -> new KeyMapping(
+            KEY_DEBUG_SUBLEVEL_HIT,
+            KeyConflictContext.IN_GAME,
+            com.mojang.blaze3d.platform.InputConstants.Type.KEYSYM,
+            GLFW.GLFW_KEY_P,
             KEY_CATEGORY
     ));
 
@@ -140,6 +151,13 @@ public class ClientEvents {
         return DEBUG_GEAR_KEY.get();
     }
 
+    /**
+     * 返回 SubLevel 命中调试测试键位映射，用于注册。
+     */
+    public static KeyMapping getDebugSubLevelHitKey() {
+        return DEBUG_SUBLEVEL_HIT_KEY.get();
+    }
+
     @SubscribeEvent
     public static void onKeyInput(InputEvent.Key event) {
         var mc = Minecraft.getInstance();
@@ -179,6 +197,99 @@ public class ClientEvents {
                             false);
                 }
             }
+        }
+
+        if (DEBUG_SUBLEVEL_HIT_KEY.get().consumeClick()) {
+            // 按下 P 键 → SubLevel 命中调试测试
+            // 模拟 PartDamageCache.damageBlock() 的完整代码路径
+            var player = mc.player;
+            var level = mc.level;
+            if (player == null || level == null) return;
+
+            Vec3 eye = player.getEyePosition();
+            Vec3 look = player.getLookAngle();
+            Vec3 end = eye.add(look.scale(WeaponOverlay.MAX_RAY_DISTANCE));
+
+            player.displayClientMessage(
+                    net.minecraft.network.chat.Component.literal("§e[SubLevelHitTest] 开始测试..."),
+                    false);
+
+            // === 测试 A：Minecraft 原生 clip 命中 ===
+            player.displayClientMessage(
+                    net.minecraft.network.chat.Component.literal("§6═══ 测试 A：Minecraft clip（plot chunk 坐标系） ═══"),
+                    false);
+            ClipContext ctx = new ClipContext(eye, end, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, player);
+            BlockHitResult bhr = level.clip(ctx);
+            if (bhr.getType() == HitResult.Type.MISS) {
+                player.displayClientMessage(
+                        net.minecraft.network.chat.Component.literal("§c✗ Minecraft clip 未命中"),
+                        false);
+            } else {
+                BlockPos bp = bhr.getBlockPos();
+                player.displayClientMessage(
+                        net.minecraft.network.chat.Component.literal("§7  clip @ " + bhr.getLocation() + " → BlockPos=" + bp + " Block=" + level.getBlockState(bp).getBlock()),
+                        false);
+
+                // 用旧方案（getContaining）查 plot chunk 坐标
+                var oldAccess = Sable.HELPER.getContaining(level, bp);
+                if (oldAccess != null) {
+                    player.displayClientMessage(
+                            net.minecraft.network.chat.Component.literal("§a  [旧方案] getContaining(BlockPos) ✅ SubLevel=" + oldAccess.getUniqueId().toString().substring(0, 8)),
+                            false);
+                } else {
+                    player.displayClientMessage(
+                            net.minecraft.network.chat.Component.literal("§c  [旧方案] getContaining(BlockPos) ❌ 不在 plot grid 中"),
+                            false);
+                }
+            }
+
+            // === 测试 B：模拟武器系统的物理世界坐标命中 ===
+            player.displayClientMessage(
+                    net.minecraft.network.chat.Component.literal("§6═══ 测试 B：使用 SableBlockHelper.findSubLevelAt() ═══"),
+                    false);
+
+            // 用 clip 命中点的位置测试新方案
+            Vec3 testHitPos = bhr.getType() != HitResult.Type.MISS
+                    ? bhr.getLocation()
+                    : eye.add(look.scale(100));
+            BlockPos.MutableBlockPos outBP = new BlockPos.MutableBlockPos();
+            var newAccess = SableBlockHelper.findSubLevelAt(level, testHitPos, outBP);
+
+            if (newAccess != null) {
+                BlockState bs = level.getBlockState(outBP);
+                player.displayClientMessage(
+                        net.minecraft.network.chat.Component.literal("§a✅ 命中! SubLevel=" + newAccess.getUniqueId().toString().substring(0, 8)
+                                + " localBP=" + outBP + " Block=" + bs.getBlock()),
+                        false);
+                player.displayClientMessage(
+                        net.minecraft.network.chat.Component.literal("§7   destroySpeed=" + bs.getDestroySpeed(level, outBP)
+                                + " isAir=" + bs.isAir()),
+                        false);
+
+                // 验证 SubLevel 物理 BB
+                var bb = newAccess.boundingBox();
+                if (bb != null) {
+                    boolean inPhysBB = testHitPos.x >= bb.minX() && testHitPos.x <= bb.maxX()
+                            && testHitPos.y >= bb.minY() && testHitPos.y <= bb.maxY()
+                            && testHitPos.z >= bb.minZ() && testHitPos.z <= bb.maxZ();
+                    player.displayClientMessage(
+                            net.minecraft.network.chat.Component.literal("§7   物理BB=[" + String.format("%.1f", bb.minX()) + "," + String.format("%.1f", bb.minY()) + "," + String.format("%.1f", bb.minZ())
+                                    + "]~[" + String.format("%.1f", bb.maxX()) + "," + String.format("%.1f", bb.maxY()) + "," + String.format("%.1f", bb.maxZ()) + "]"
+                                    + " hitPos-in-BB=" + inPhysBB),
+                            false);
+                }
+            } else {
+                player.displayClientMessage(
+                        net.minecraft.network.chat.Component.literal("§c❌ findSubLevelAt 未命中任何 SubLevel"),
+                        false);
+                player.displayClientMessage(
+                        net.minecraft.network.chat.Component.literal("§7  → 试试把准星对准载具物理结构"),
+                        false);
+            }
+
+            player.displayClientMessage(
+                    net.minecraft.network.chat.Component.literal("§e[SubLevelHitTest] 测试结束"),
+                    false);
         }
     }
 

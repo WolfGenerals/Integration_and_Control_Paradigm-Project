@@ -12,6 +12,7 @@
   "key.iac_p.raycast_fire": "Raycast / Fire",
   "key.iac_p.weapon_fire": "Fire Weapon",
   "key.iac_p.debug_gear": "Debug Gear Toggle",
+  "key.iac_p.debug_sublevel_hit": "SubLevel Hit Debug Test (P)",
 
   "message.iac_p.cockpit_incomplete": "This cockpit is not available",
   "message.iac_p.multiple_cockpits": "Please remove extra cockpit structures",

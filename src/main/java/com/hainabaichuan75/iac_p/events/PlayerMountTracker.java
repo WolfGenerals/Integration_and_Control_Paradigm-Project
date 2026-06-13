@@ -2,6 +2,7 @@ package com.hainabaichuan75.iac_p.events;
 
 import com.hainabaichuan75.iac_p.IACP;
 import com.hainabaichuan75.iac_p.content.blocks.turret.TurretAimController;
+import com.hainabaichuan75.iac_p.events.PartDamageCache;
 import com.hainabaichuan75.iac_p.index.ModBlocks;
 import com.hainabaichuan75.iac_p.network.ModNetworking;
 import com.hainabaichuan75.iac_p.network.packets.MountedStateS2CPacket;
@@ -123,7 +124,9 @@ public class PlayerMountTracker {
         if (data != null) {
             // 目标 2：清除 SubLevel 占用
             SUBLEVEL_OCCUPANTS.remove(data.subLevelUUID());
-            IACP.LOGGER.info("[ServerMount] 已清除 SubLevel {} 的占用", data.subLevelUUID());
+            // 部件损坏：清理该 SubLevel 的耐久缓存
+            PartDamageCache.clear(data.subLevelUUID());
+            IACP.LOGGER.info("[ServerMount] 已清除 SubLevel {} 的占用与部件缓存", data.subLevelUUID());
         } else {
             IACP.LOGGER.warn("[ServerMount] unmount() 时 MOUNTED 表中无此玩家数据");
         }

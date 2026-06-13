@@ -34,3 +34,5 @@
 | 27 | [多 SubLevel 约束链](27-多SubLevel约束链：三层嵌套避雷针炮塔（06-09血泪教训）.md) | 约束链, GenericConstraint, pose一致性 |
 | 28 | [Create 应力网络 RPM 阶跃特性](28-Create应力网络RPM阶跃特性.md) | RPM, 阶跃, DebugGear, Create应力网络 |
 | 29 | [炮塔位置模式 PD 伺服（SwivelBearing 模式）](29-炮塔位置模式PD伺服（SwivelBearing模式）.md) | 位置模式, setMotor, PD伺服, RotaryConstraint |
+| 30 | [Sable API 查询方式：Vector3dc vs SubLevel 遍历](30-SableAPI查询方式：Vector3dc%20vs%20SubLevel遍历.md) | getContaining, SubLevelContainer, SubLevelAccess, BlockPos | 
+| 31 | [SubLevel 射线追踪与归属管理](31-SubLevel射线追踪与归属管理.md) | rayTraceSubLevels, SubLevelOwnership, reestablishConstraints, clipSubLevelsInner |

@@ -1,6 +1,7 @@
 package com.hainabaichuan75.iac_p.content.blocks.turret;
 
 import com.hainabaichuan75.iac_p.IACP;
+import com.hainabaichuan75.iac_p.events.SubLevelOwnership;
 import com.hainabaichuan75.iac_p.index.ModBlockEntityTypes;
 import com.simibubi.create.content.kinetics.base.KineticBlockEntity;
 import com.simibubi.create.foundation.blockEntity.behaviour.BlockEntityBehaviour;
@@ -444,6 +445,11 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
         GRINDSTONE_ANCHOR_MAP.put(grindstoneSL.getUniqueId(), new double[]{anchorX, anchorY, anchorZ});
         sendAnchorDataToClients();
 
+        // 注册归属：砂轮 → 载具
+        if (this.vehicleSubLevelId != null) {
+            SubLevelOwnership.register(grindstoneSL.getUniqueId(), this.vehicleSubLevelId);
+        }
+
         // ================================================================
         //  建立旋转轴承（RotaryConstraint）：将砂轮锚定到载具上
         //  ⚠ 关键：pos1/pos2 使用 SubLevel 底层（underlying level）的**方块实际坐标**！
@@ -516,6 +522,11 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
                 this.lightningRodSubLevelId = rodSL.getUniqueId();
                 ROD_OWNER_MAP.put(rodSL.getUniqueId(), this.worldPosition);
                 IACP.LOGGER.info("[TurretBase] 炮管(避雷针) SubLevel UUID={}", rodSL.getUniqueId());
+
+                // 注册归属：避雷针 → 载具
+                if (this.vehicleSubLevelId != null) {
+                    SubLevelOwnership.register(rodSL.getUniqueId(), this.vehicleSubLevelId);
+                }
 
                 // ============================================================
                 //  与砂轮完全相同的约束坐标模式：getCenterBlock() + 0.5
@@ -619,6 +630,7 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
             // 移除砂轮
             // 从静态注册表中移除
             if (this.grindstoneSubLevelId != null) {
+                SubLevelOwnership.unregister(this.grindstoneSubLevelId);
                 GRINDSTONE_OWNER_MAP.remove(this.grindstoneSubLevelId);
                 GRINDSTONE_ANCHOR_MAP.remove(this.grindstoneSubLevelId);
                 GRINDSTONE_LINE_CACHE.remove(this.grindstoneSubLevelId);
@@ -628,6 +640,7 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
 
             // 移除避雷针
             if (this.lightningRodSubLevelId != null) {
+                SubLevelOwnership.unregister(this.lightningRodSubLevelId);
                 ROD_OWNER_MAP.remove(this.lightningRodSubLevelId);
             }
             removeSubLevelById(container, this.lightningRodSubLevelId);
@@ -974,6 +987,25 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
         }
 
         // ================================================================
+        //  [断线重连修复] 服务端加载时重建约束 + 重新注册归属
+        //  世界重载后，SubLevel 仍存在但约束句柄丢失；
+        //  归属记录（SubLevelOwnership）也在内存中丢失。
+        // ================================================================
+        if (!clientPacket && this.level != null && !this.level.isClientSide && this.assembled) {
+            // 重新注册归属：砂轮 + 避雷针 → 载具
+            if (this.vehicleSubLevelId != null) {
+                if (this.grindstoneSubLevelId != null) {
+                    SubLevelOwnership.register(this.grindstoneSubLevelId, this.vehicleSubLevelId);
+                }
+                if (this.lightningRodSubLevelId != null) {
+                    SubLevelOwnership.register(this.lightningRodSubLevelId, this.vehicleSubLevelId);
+                }
+            }
+            // 重建约束（SubLevel 容器此时应已就绪）
+            reestablishConstraints();
+        }
+
+        // ================================================================
         //  更新地毯位置缓存（客户端）：用于 AxisLineRenderer 在主世界定位
         //  通过 Sable.HELPER.getContaining() 获取地毯所在的 SubLevel
         //  后续可以直接用 subLevelPose.transformPosition(localPos) 算出世界坐标
@@ -989,6 +1021,124 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
             } catch (Exception e) {
                 IACP.LOGGER.warn("[TurretBase] 更新地毯位置缓存失败（非致命）", e);
             }
+        }
+    }
+
+    /**
+     * 重建约束（世界重载/断线重连后使用）。
+     * <p>
+     * 从 NBT 恢复的 UUID 重新找到 SubLevel 并建立约束关系。
+     * 约束参数与 {@link #assemble()} 中完全一致。
+     */
+    private void reestablishConstraints() {
+        if (this.level == null || this.level.isClientSide) return;
+        if (!this.assembled) return;
+        if (this.grindstoneSubLevelId == null) return;
+
+        IACP.LOGGER.info("[TurretBase] ====== 重建约束 @ {} ======", this.worldPosition);
+
+        try {
+            ServerLevel serverLevel = (ServerLevel) this.level;
+            ServerSubLevelContainer container = (ServerSubLevelContainer) SubLevelContainer.getContainer(serverLevel);
+            if (container == null) {
+                IACP.LOGGER.warn("[TurretBase] 重建约束: SubLevelContainer 不可用");
+                return;
+            }
+
+            ServerSubLevel grindstoneSL = (ServerSubLevel) container.getSubLevel(this.grindstoneSubLevelId);
+            if (grindstoneSL == null || grindstoneSL.isRemoved()) {
+                IACP.LOGGER.warn("[TurretBase] 重建约束: 砂轮 SubLevel 不存在或已移除");
+                return;
+            }
+
+            PhysicsPipeline pipeline = container.physicsSystem().getPipeline();
+            if (pipeline == null) return;
+
+            // 寻找载具 SubLevel
+            ServerSubLevel vehicleSL = null;
+            if (this.vehicleSubLevelId != null) {
+                vehicleSL = (ServerSubLevel) container.getSubLevel(this.vehicleSubLevelId);
+            }
+
+            // ---- 1. 方向机：砂轮↔载具 RotaryConstraint ----
+            if (vehicleSL != null && !vehicleSL.isRemoved() && this.swivelBearingHandle == null) {
+                try {
+                    BlockPos gc = grindstoneSL.getPlot().getCenterBlock();
+                    Vector3d pos1 = new Vector3d(gc.getX() + 0.5, gc.getY() + 0.5, gc.getZ() + 0.5)
+                            .add(ANCHOR_GS_SWIVEL_X, ANCHOR_GS_SWIVEL_Y, ANCHOR_GS_SWIVEL_Z);
+                    Vector3d pos2 = new Vector3d(
+                            this.worldPosition.getX() + 0.5,
+                            this.worldPosition.getY() + 0.5,
+                            this.worldPosition.getZ() + 0.5
+                    ).add(ANCHOR_VEHICLE_X, ANCHOR_VEHICLE_Y, ANCHOR_VEHICLE_Z);
+                    RotaryConstraintConfiguration rotaryConfig = new RotaryConstraintConfiguration(
+                            pos1, pos2,
+                            new Vector3d(0, 1, 0),
+                            new Vector3d(0, 1, 0)
+                    );
+                    this.swivelBearingHandle = pipeline.addConstraint(grindstoneSL, vehicleSL, rotaryConfig);
+                    this.swivelBearingHandle.setContactsEnabled(false);
+                    IACP.LOGGER.info("[TurretBase] 重建 ✅ 方向机 RotaryConstraint");
+                } catch (Exception e) {
+                    IACP.LOGGER.warn("[TurretBase] 重建方向机失败", e);
+                }
+            }
+
+            // ---- 2. 炮管（避雷针）SubLevel + 高低机 GenericConstraint ----
+            if (this.lightningRodSubLevelId != null && this.barrelPitchHandle == null) {
+                ServerSubLevel rodSL = (ServerSubLevel) container.getSubLevel(this.lightningRodSubLevelId);
+                if (rodSL != null && !rodSL.isRemoved()) {
+                    try {
+                        BlockPos rc = rodSL.getPlot().getCenterBlock();
+                        Vector3d pos1 = new Vector3d(rc.getX() + 0.5, rc.getY() + 0.5, rc.getZ() + 0.5)
+                                .add(ANCHOR_ROD_X, ANCHOR_ROD_Y, ANCHOR_ROD_Z);
+                        BlockPos gc2 = grindstoneSL.getPlot().getCenterBlock();
+                        Vector3d pos2 = new Vector3d(gc2.getX() + 0.5, gc2.getY() + 0.5, gc2.getZ() + 0.5)
+                                .add(ANCHOR_GS_ROD_X, ANCHOR_GS_ROD_Y, ANCHOR_GS_ROD_Z);
+                        GenericConstraintConfiguration bindConfig = new GenericConstraintConfiguration(
+                                pos1, pos2,
+                                new Quaterniond(), new Quaterniond(),
+                                EnumSet.of(
+                                        ConstraintJointAxis.LINEAR_X,
+                                        ConstraintJointAxis.LINEAR_Y,
+                                        ConstraintJointAxis.LINEAR_Z,
+                                        ConstraintJointAxis.ANGULAR_Y,
+                                        ConstraintJointAxis.ANGULAR_Z
+                                )
+                        );
+                        this.barrelPitchHandle = pipeline.addConstraint(rodSL, grindstoneSL, bindConfig);
+                        this.barrelPitchHandle.setContactsEnabled(false);
+                        IACP.LOGGER.info("[TurretBase] 重建 ✅ 高低机 GenericConstraint");
+                    } catch (Exception e) {
+                        IACP.LOGGER.warn("[TurretBase] 重建高低机失败", e);
+                    }
+
+                    // ---- 3. 避雷针↔载具 FreeConstraint（碰撞禁用） ----
+                    if (vehicleSL != null && !vehicleSL.isRemoved() && this.rodVehicleFreeHandle == null) {
+                        try {
+                            Vector3d rodCenter = new Vector3d(
+                                    rodSL.getPlot().getCenterBlock().getX() + 0.5,
+                                    rodSL.getPlot().getCenterBlock().getY() + 0.5,
+                                    rodSL.getPlot().getCenterBlock().getZ() + 0.5);
+                            Vector3d vehicleCenter = new Vector3d(
+                                    this.worldPosition.getX() + 0.5,
+                                    this.worldPosition.getY() + 0.5,
+                                    this.worldPosition.getZ() + 0.5);
+                            FreeConstraintConfiguration freeConfig = new FreeConstraintConfiguration(
+                                    rodCenter, vehicleCenter, new Quaterniond());
+                            this.rodVehicleFreeHandle = pipeline.addConstraint(rodSL, vehicleSL, freeConfig);
+                            this.rodVehicleFreeHandle.setContactsEnabled(false);
+                            IACP.LOGGER.info("[TurretBase] 重建 ✅ 避雷针↔载具 碰撞禁用");
+                        } catch (Exception e) {
+                            IACP.LOGGER.warn("[TurretBase] 重建碰撞禁用失败", e);
+                        }
+                    }
+                }
+            }
+
+            IACP.LOGGER.info("[TurretBase] ====== 约束重建完成 @ {} ======", this.worldPosition);
+        } catch (Exception e) {
+            IACP.LOGGER.error("[TurretBase] 重建约束异常", e);
         }
     }
 }
