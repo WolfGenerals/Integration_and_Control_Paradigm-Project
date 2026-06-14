@@ -221,7 +221,10 @@ public class WeaponOverlay {
         Vec3 dir = new Vec3(fwd.x, fwd.y, fwd.z);
 
         // 从炮口沿炮管方向做射线检测
-        Vec3 hitPos = raycastGeneric(mc, origin, dir, MAX_RAY_DISTANCE, mountedUUID, rodId);
+        // 射线穿透所有 SubLevel 物理外壳，只停在方块/实体碰撞箱上。
+        // 实际武器伤害服务端会使用 SableBlockHelper + AffiliationRegistry 重新验证，
+        // 客户端结果仅用于弹道渲染视觉和初始瞄准坐标。
+        Vec3 hitPos = raycastGeneric(mc, origin, dir, MAX_RAY_DISTANCE);
 
         // 存储弹道数据 + 发送伤害数据包
         activeFires.add(new TurretFireInstance(origin, hitPos));
@@ -287,10 +290,8 @@ public class WeaponOverlay {
         var lookVec = camera.getLookVector();
         Vec3 look = new Vec3(lookVec.x, lookVec.y, lookVec.z);
 
-        ClientSubLevel mountedSL = ClientMountHandler.getMountedClientSubLevel();
-        UUID excludeUUID = mountedSL != null ? mountedSL.getUniqueId() : null;
-
-        return raycastGeneric(mc, from, look, MAX_RAY_DISTANCE, excludeUUID, null);
+        // 射线穿透所有 SubLevel 物理外壳，只停在方块/实体碰撞箱上
+        return raycastGeneric(mc, from, look, MAX_RAY_DISTANCE);
     }
 
     /**
@@ -298,18 +299,20 @@ public class WeaponOverlay {
      * <p>
      * 所有命中均使用精确交点坐标：方块使用 {@link ClipContext.Block#COLLIDER}
      * （自动忽略无碰撞箱的植物/农作物/藤曼等）+ 树叶穿透循环； 实体使用 {@link AABB#clip(Vec3, Vec3)}
-     * 计算射线与碰撞箱的交点； SubLevel 使用 AABB 算法交点。
+     * 计算射线与碰撞箱的交点。
+     * <p>
+     * <b>不检测 SubLevel 物理外壳 AABB</b>：射线直接穿透所有 SubLevel 的灰色/红色碰撞箱表面， 但遇到 SubLevel
+     * 内部的实际方块（如栅栏、墙壁、驾驶舱）时会正常停止。 这与
+     * {@link com.hainabaichuan75.iac_p.affiliation.RayPolicy#PENETRATE_AABB}
+     * 的语义一致。
      *
      * @param mc Minecraft 实例
      * @param origin 射线起点
      * @param dir 射线方向（单位向量）
      * @param maxDist 最大检测距离
-     * @param excludeSubLevelUUID 要排除的第一个 SubLevel UUID（通常为载具自身）
-     * @param excludeSubLevelUUID2 要排除的第二个 SubLevel UUID（通常为炮管自身），可为 null
      * @return 命中点世界坐标，无命中时返回射线端点
      */
-    private static Vec3 raycastGeneric(Minecraft mc, Vec3 origin, Vec3 dir, double maxDist,
-            UUID excludeSubLevelUUID, UUID excludeSubLevelUUID2) {
+    private static Vec3 raycastGeneric(Minecraft mc, Vec3 origin, Vec3 dir, double maxDist) {
         Vec3 to = origin.add(dir.scale(maxDist));
         double closestDistSq = maxDist * maxDist;
         Vec3 closestHit = null;
@@ -366,45 +369,51 @@ public class WeaponOverlay {
             }
         }
 
-        // ---- 3. SubLevel 物理结构检测 ----
+        // ---- 3. SubLevel 内部方块检测 ----
+        // 将射线变换到每个 SubLevel 的局部空间做 clip，再将命中点变换回主世界坐标。
+        // SubLevel 内方块的位置存储在其局部 plot chunk 坐标系中，mc.level.clip()
+        // 返回的命中位置是局部坐标，必须通过 logicalPose 变换到主世界。
         try {
             SubLevelContainer container = SubLevelContainer.getContainer(mc.level);
             if (container != null) {
-                for (SubLevel subLevel : container.getAllSubLevels()) {
-                    if (!(subLevel instanceof ClientSubLevel csl)) {
+                for (SubLevel sl : container.getAllSubLevels()) {
+                    if (sl.isRemoved() || !(sl instanceof ClientSubLevel csl)) {
                         continue;
                     }
-                    UUID suuid = csl.getUniqueId();
-                    // 排除自身载具和炮管 SubLevel
-                    if (suuid.equals(excludeSubLevelUUID)) {
-                        continue;
-                    }
-                    if (excludeSubLevelUUID2 != null && suuid.equals(excludeSubLevelUUID2)) {
+                    var pose = csl.logicalPose();
+                    if (pose == null) {
                         continue;
                     }
 
-                    BoundingBox3dc bb = csl.boundingBox();
-                    if (bb == null) {
+                    // 变换射线起点/终点到 SubLevel 局部空间
+                    Vec3 localFrom = pose.transformPositionInverse(origin);
+                    Vec3 localTo = pose.transformPositionInverse(to);
+                    if (localFrom.equals(localTo)) {
                         continue;
                     }
 
-                    Vec3 hit = rayAABBIntersection(origin, dir,
-                            bb.minX(), bb.minY(), bb.minZ(),
-                            bb.maxX(), bb.maxY(), bb.maxZ());
-                    if (hit != null) {
-                        double distSq = hit.distanceToSqr(origin);
+                    var clipCtx = new ClipContext(
+                            localFrom, localTo,
+                            ClipContext.Block.COLLIDER,
+                            ClipContext.Fluid.NONE,
+                            net.minecraft.world.phys.shapes.CollisionContext.empty());
+                    BlockHitResult localHit = mc.level.clip(clipCtx);
+
+                    if (localHit.getType() != HitResult.Type.MISS) {
+                        // 将命中位置变换回主世界空间
+                        Vec3 worldHitLoc = pose.transformPosition(localHit.getLocation());
+                        double distSq = worldHitLoc.distanceToSqr(origin);
                         if (distSq < closestDistSq && distSq > MIN_RAY_DISTANCE * MIN_RAY_DISTANCE) {
                             closestDistSq = distSq;
-                            closestHit = hit;
-                            hitType = "SubLevel";
+                            closestHit = worldHitLoc;
+                            hitType = "SubLevelBlock";
                         }
                     }
                 }
             }
         } catch (Exception e) {
-            IACP.LOGGER.warn("[WeaponOverlay] SubLevel 射线检测异常: {}", e.getMessage());
+            IACP.LOGGER.warn("[WeaponOverlay] SubLevel 局部空间 clip 异常: {}", e.getMessage());
         }
-
         if (closestHit == null) {
             closestHit = to;
             hitType = "Air";

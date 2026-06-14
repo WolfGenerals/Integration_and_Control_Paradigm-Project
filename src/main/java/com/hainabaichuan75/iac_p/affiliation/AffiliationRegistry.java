@@ -2,6 +2,8 @@ package com.hainabaichuan75.iac_p.affiliation;
 
 import com.hainabaichuan75.iac_p.IACP;
 
+import net.neoforged.neoforge.common.NeoForge;
+
 import javax.annotation.Nullable;
 import java.util.Collections;
 import java.util.HashSet;
@@ -65,6 +67,31 @@ public final class AffiliationRegistry {
      */
     private static final Map<UUID, Set<UUID>> VEHICLE_TO_GROUPS = new ConcurrentHashMap<>();
 
+    // ==================================================================
+    //  性能监控
+    // ==================================================================
+    /**
+     * 慢查询阈值（纳秒）。超过此阈值的查询会被记录到 DEBUG 日志。
+     * <p>
+     * 默认 100 微秒 (100_000 ns)。可通过调试命令临时调整。
+     */
+    private static long SLOW_QUERY_THRESHOLD_NS = 100_000;
+
+    /**
+     * 设置慢查询阈值（纳秒）。传入 0 或负值表示禁用慢查询日志。
+     */
+    public static void setSlowQueryThreshold(long nanos) {
+        SLOW_QUERY_THRESHOLD_NS = nanos;
+        IACP.LOGGER.info("[AffiliationRegistry] 慢查询阈值已设为 {} ns", nanos);
+    }
+
+    /**
+     * 获取当前慢查询阈值。
+     */
+    public static long getSlowQueryThreshold() {
+        return SLOW_QUERY_THRESHOLD_NS;
+    }
+
     private AffiliationRegistry() {
     }
 
@@ -104,6 +131,10 @@ public final class AffiliationRegistry {
         IACP.LOGGER.debug("[AffiliationRegistry] 注册: {} → role={}, group={}",
                 subLevelUUID.toString().substring(0, 8),
                 tag.role(), tag.groupId() != null ? tag.groupId().toString().substring(0, 8) : "null");
+
+        // 抛出事件
+        NeoForge.EVENT_BUS.post(AffiliationChangeEvent.ofSubLevel(
+                AffiliationChangeEvent.ChangeType.REGISTER, subLevelUUID, tag));
     }
 
     /**
@@ -145,6 +176,10 @@ public final class AffiliationRegistry {
         }
 
         IACP.LOGGER.debug("[AffiliationRegistry] 注销: {}", subLevelUUID.toString().substring(0, 8));
+
+        // 抛出事件
+        NeoForge.EVENT_BUS.post(AffiliationChangeEvent.ofSubLevel(
+                AffiliationChangeEvent.ChangeType.UNREGISTER, subLevelUUID, oldTag));
     }
 
     /**
@@ -168,6 +203,9 @@ public final class AffiliationRegistry {
                     groupId.toString().substring(0, 8), members.size());
         }
 
+        // 抛出事件
+        NeoForge.EVENT_BUS.post(AffiliationChangeEvent.ofGroup(groupId));
+
         // 清理载具→组索引
         for (Map.Entry<UUID, Set<UUID>> entry : VEHICLE_TO_GROUPS.entrySet()) {
             Set<UUID> groups = entry.getValue();
@@ -181,6 +219,28 @@ public final class AffiliationRegistry {
     }
 
     // ==================================================================
+    //  性能监控辅助
+    // ==================================================================
+    /**
+     * 记录查询耗时，超过阈值时输出 DEBUG 日志。
+     *
+     * @param methodName 方法名
+     * @param startNanos 起始纳秒时间
+     * @param detail 附加信息（如 UUID 缩写），可为 null
+     */
+    private static void recordQueryTime(String methodName, long startNanos, @Nullable String detail) {
+        if (SLOW_QUERY_THRESHOLD_NS <= 0) {
+            return; // 禁用
+        }
+        long elapsed = System.nanoTime() - startNanos;
+        if (elapsed > SLOW_QUERY_THRESHOLD_NS) {
+            String suffix = detail != null ? " [" + detail + "]" : "";
+            IACP.LOGGER.debug("[AffiliationRegistry] 慢查询: {}{} 耗时 {} μs",
+                    methodName, suffix, elapsed / 1000);
+        }
+    }
+
+    // ==================================================================
     //  查询
     // ==================================================================
     /**
@@ -190,7 +250,13 @@ public final class AffiliationRegistry {
      */
     @Nullable
     public static AffiliationTag getAffiliation(UUID subLevelUUID) {
-        return subLevelUUID != null ? SUBLEVEL_TO_TAG.get(subLevelUUID) : null;
+        if (subLevelUUID == null) {
+            return null;
+        }
+        long start = System.nanoTime();
+        AffiliationTag result = SUBLEVEL_TO_TAG.get(subLevelUUID);
+        recordQueryTime("getAffiliation", start, subLevelUUID.toString().substring(0, 8));
+        return result;
     }
 
     /**
@@ -228,14 +294,21 @@ public final class AffiliationRegistry {
         if (groupId == null) {
             return Collections.emptySet();
         }
+        long start = System.nanoTime();
         Set<UUID> members = GROUP_TO_MEMBERS.get(groupId);
+        recordQueryTime("getAllInGroup", start, groupId.toString().substring(0, 8));
         return members != null ? Collections.unmodifiableSet(members) : Collections.emptySet();
     }
 
     /**
      * 获取载具自身及其所有相关 SubLevel UUID 的并集。
      * <p>
-     * 用于射线追踪排除：返回载具自身 + 所有衍生结构（炮塔底座、砂轮、避雷针等）。
+     * 用于射线追踪排除：返回载具自身 + 所有衍生结构（炮塔底座、砂轮、避雷针等）。 包括：
+     * <ul>
+     * <li>载具自身</li>
+     * <li>所有组内成员（通过 VEHICLE_TO_GROUPS 索引）</li>
+     * <li>所有 vehicleId 指向此载具但不在任何组中的散落衍生结构</li>
+     * </ul>
      *
      * @param vehicleUUID 载具 SubLevel UUID
      * @return 包含载具自身和所有相关 SubLevel 的不可变集合
@@ -256,6 +329,18 @@ public final class AffiliationRegistry {
                 if (members != null) {
                     result.addAll(members);
                 }
+            }
+        }
+
+        // 补充收集所有 vehicleId 指向此载具但不在任何组中的散落衍生结构
+        for (Map.Entry<UUID, AffiliationTag> entry : SUBLEVEL_TO_TAG.entrySet()) {
+            UUID slUUID = entry.getKey();
+            AffiliationTag tag = entry.getValue();
+            if (tag.vehicleId() != null
+                    && tag.vehicleId().equals(vehicleUUID)
+                    && tag.groupId() == null
+                    && !slUUID.equals(vehicleUUID)) {
+                result.add(slUUID);
             }
         }
 
@@ -287,6 +372,9 @@ public final class AffiliationRegistry {
             PLAYER_TO_VEHICLE.put(playerUUID, vehicleUUID);
             VEHICLE_TO_PLAYER.put(vehicleUUID, playerUUID);
         }
+
+        // 抛出事件
+        NeoForge.EVENT_BUS.post(AffiliationChangeEvent.ofPlayerBind(playerUUID, vehicleUUID));
     }
 
     /**
@@ -296,7 +384,13 @@ public final class AffiliationRegistry {
      */
     @Nullable
     public static UUID getPlayerVehicle(UUID playerUUID) {
-        return playerUUID != null ? PLAYER_TO_VEHICLE.get(playerUUID) : null;
+        if (playerUUID == null) {
+            return null;
+        }
+        long start = System.nanoTime();
+        UUID result = PLAYER_TO_VEHICLE.get(playerUUID);
+        recordQueryTime("getPlayerVehicle", start, playerUUID.toString().substring(0, 8));
+        return result;
     }
 
     /**
@@ -351,6 +445,16 @@ public final class AffiliationRegistry {
      * @return 交互策略
      */
     public static RayPolicy resolvePolicy(RayType rayType, @Nullable AffiliationTag viewer, AffiliationTag target) {
+        long start = System.nanoTime();
+        RayPolicy result = resolvePolicyImpl(rayType, viewer, target);
+        recordQueryTime("resolvePolicy", start, rayType.name() + "/" + (target.role() != null ? target.role().name() : "?"));
+        return result;
+    }
+
+    /**
+     * resolvePolicy 的内部实现，便于外层包裹性能监控。
+     */
+    private static RayPolicy resolvePolicyImpl(RayType rayType, @Nullable AffiliationTag viewer, AffiliationTag target) {
         if (target == null) {
             return RayPolicy.BLOCK;
         }
@@ -358,32 +462,27 @@ public final class AffiliationRegistry {
         boolean sameVehicle = isSameVehicle(viewer, target);
         boolean sameFaction = isSameFaction(viewer, target);
 
+        // 如果观察者和目标都无归属信息，回退为默认阻挡
+        if (viewer == null && target.role() == AffiliationRole.UNKNOWN) {
+            return RayPolicy.BLOCK;
+        }
+
         return switch (rayType) {
             // ============================================================
             //  摄像机瞄准射线
             // ============================================================
             case CAMERA_AIM -> {
-                if (!sameVehicle) {
-                    yield RayPolicy.BLOCK; // 不同车 → 正常阻挡
-                }
-                // 同车：根据角色决定穿透策略
+                // 全域 PENETRATE_AABB：穿透所有物理结构的 SubLevel 碰撞箱表面
+                // （灰色/红色线框），但保留命中内部方块自身碰撞箱的能力。
+                // 无论是否同车、同阵营——让准星可以穿过任何载具的结构外壳，
+                // 精确选中内部的方块实体。
                 yield switch (target.role()) {
-                    case TURRET_PITCH ->
-                        RayPolicy.IGNORE;   // 自己的炮管不挡准星
                     case PROJECTILE ->
-                        RayPolicy.IGNORE;     // 弹射物完全穿透
-                    case VEHICLE_BODY ->
-                        RayPolicy.PENETRATE_AABB; // 车身穿透AABB但保留内部方块
-                    case TURRET_BASE ->
-                        RayPolicy.PENETRATE_AABB;  // 炮塔底座同车身
-                    case TURRET_YAW ->
-                        RayPolicy.PENETRATE_AABB;   // 方向机同车身
-                    case WEAPON_CANNON, WEAPON_MACHINEGUN, WEAPON_MISSILE, WEAPON_LASER ->
-                        RayPolicy.PENETRATE_AABB;  // 武器SubLevel同炮塔底座
+                        RayPolicy.IGNORE;   // 弹射物无内部方块，完全穿透
                     case SENSOR ->
-                        RayPolicy.IGNORE;
-                    case UNKNOWN ->
-                        RayPolicy.PENETRATE_AABB;
+                        RayPolicy.IGNORE;   // 传感器无内部方块，完全穿透
+                    default ->
+                        RayPolicy.PENETRATE_AABB; // 所有实体结构：穿透AABB但保留内部方块碰撞
                 };
             }
 

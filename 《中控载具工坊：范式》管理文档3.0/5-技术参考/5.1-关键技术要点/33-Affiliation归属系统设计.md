@@ -1,5 +1,5 @@
 ---
-updated: 2026-06-14
+updated: 2026-06-14 (v2：新增事件机制、调试命令、性能监控、非组内衍生收集)
 status: current
 maintainer: @项目协作者
 ---
@@ -150,13 +150,16 @@ WeaponFireC2SPacket.handle()
 
 | ↓目标角色 \ 关系→ | 同车 | 同阵营 | 敌对/中立 |
 |:---|---:|:---:|:---:|
-| VEHICLE_BODY | PENETRATE_AABB | BLOCK | BLOCK |
-| TURRET_BASE | PENETRATE_AABB | BLOCK | BLOCK |
-| TURRET_YAW | PENETRATE_AABB | BLOCK | BLOCK |
-| TURRET_PITCH | IGNORE | BLOCK | BLOCK |
+| VEHICLE_BODY | PENETRATE_AABB | PENETRATE_AABB | PENETRATE_AABB |
+| TURRET_BASE | PENETRATE_AABB | PENETRATE_AABB | PENETRATE_AABB |
+| TURRET_YAW | PENETRATE_AABB | PENETRATE_AABB | PENETRATE_AABB |
+| TURRET_PITCH | PENETRATE_AABB | PENETRATE_AABB | PENETRATE_AABB |
+| WEAPON_CANNON | PENETRATE_AABB | PENETRATE_AABB | PENETRATE_AABB |
+| WEAPON_MACHINEGUN | PENETRATE_AABB | PENETRATE_AABB | PENETRATE_AABB |
 | PROJECTILE | IGNORE | IGNORE | IGNORE |
+| SENSOR | IGNORE | IGNORE | IGNORE |
 
-**效果**：自己的炮管不挡准星，自己的车体 AABB 不挡准星，但碰到内部方块时停。
+**效果**：穿过所有物理结构的 SubLevel 碰撞箱表面（灰色/红色线框），但保留命中内部方块自身碰撞箱的能力。弹射物和传感器等无内部方块的虚拟结构则完全穿透。
 
 ### 武器伤害射线（WEAPON_DAMAGE）
 
@@ -256,3 +259,89 @@ tag.putInt("Faction", faction);
 | 传感器/探测 | `RayType.SENSOR_SCAN` + `Role.SENSOR` |
 | 部件硬度系统 | 在 `AffiliationTag` 或组级别加硬度/伤害减免 |
 | 骑乘AI队友 | `faction` + `ownerId` 组合判断 |
+
+---
+
+## 八、06-14 增强功能
+
+### 8.1 AffiliationChangeEvent（归属变更事件）
+
+**文件**：`affiliation/AffiliationChangeEvent.java`
+
+当注册表状态发生变化时，通过 `NeoForge.EVENT_BUS.post()` 广播事件，解耦其他模块：
+
+| ChangeType | 触发时机 | 携带数据 |
+|-----------|---------|---------|
+| `REGISTER` | 新 SubLevel 注册归属标签 | subLevelUUID, tag |
+| `UNREGISTER` | SubLevel 注销归属标签 | subLevelUUID, oldTag |
+| `UNREGISTER_GROUP` | 整组注销 | groupId |
+| `PLAYER_BIND` | 玩家-载具绑定/解绑 | playerUUID, vehicleUUID |
+
+**监听示例**：
+```java
+@SubscribeEvent
+public static void onAffiliationChange(AffiliationChangeEvent event) {
+    if (event.getChangeType() == AffiliationChangeEvent.ChangeType.UNREGISTER_GROUP) {
+        IACP.LOGGER.info("炮塔组 {} 已被摧毁", event.getGroupId().toString().substring(0, 8));
+    }
+}
+```
+
+**设计决策**：
+- 事后通知（post-notification）语义：事件在 Registry 状态变更后抛出
+- 监听器不应在事件处理中再次修改同一个 Registry，以免递归
+- 使用工厂方法（`ofSubLevel`/`ofGroup`/`ofPlayerBind`）构造事件，避免构造器参数混淆
+
+### 8.2 AffiliationCommand（调试命令）
+
+**文件**：`affiliation/AffiliationCommand.java`
+
+通过 `RegisterCommandsEvent` 注册以下命令，需 OP 权限等级 2：
+
+| 子命令 | 功能 |
+|-------|------|
+| `/iacp affiliation list` | 列出当前注册总数和玩家-载具绑定概览 |
+| `/iacp affiliation check <uuid>` | 显示指定 SubLevel 的完整归属信息（角色、阵营、祖先、组内成员） |
+| `/iacp affiliation verify` | 执行一致性检查并报告当前阈值 |
+| `/iacp affiliation slowquery <nanos>` | 动态调整慢查询阈值（0=禁用，默认 100,000ns=100μs） |
+| `/iacp affiliation player <玩家>` | 查看某玩家的载具及其所有衍生结构 |
+
+### 8.3 性能监控系统
+
+**位置**：`AffiliationRegistry.java §性能监控辅助`
+
+在四个热路径上嵌入纳秒计时：
+
+```java
+// 示例：resolvePolicy 的慢查询日志输出
+[AffiliationRegistry] 慢查询: resolvePolicy [WEAPON_DAMAGE/TURRET_YAW] 耗时 235 μs
+```
+
+- 默认阈值 **100 μs**（100,000 ns），超过时输出 DEBUG 级别日志
+- 可通过 `setSlowQueryThreshold(nanos)` 动态调整
+- 设为 0 或负值可完全禁用
+- `resolvePolicy` 重构为 `resolvePolicy()`（包裹计时）→ `resolvePolicyImpl()`（核心逻辑）两层
+
+### 8.4 getOwnAffiliatedSet() 非组内收集增强
+
+**背景**：原实现只收集 `VEHICLE_TO_GROUPS` 索引中的组内成员。如果一个衍生结构设置了 `vehicleId` 但没有 `groupId`（不属于任何逻辑组），它不会被纳入射线排除集合，可能导致武器误伤。
+
+**修复**：在 `getOwnAffiliatedSet()` 中追加扫描 `SUBLEVEL_TO_TAG` 全表，收集所有 `vehicleId == vehicleUUID && groupId == null` 的散落条目：
+
+```java
+// 补充收集所有 vehicleId 指向此载具但不在任何组中的散落衍生结构
+for (Map.Entry<UUID, AffiliationTag> entry : SUBLEVEL_TO_TAG.entrySet()) {
+    UUID slUUID = entry.getKey();
+    AffiliationTag tag = entry.getValue();
+    if (tag.vehicleId() != null
+            && tag.vehicleId().equals(vehicleUUID)
+            && tag.groupId() == null
+            && !slUUID.equals(vehicleUUID)) {
+        result.add(slUUID);
+    }
+}
+```
+
+### 8.5 ComponentHost 客户端守卫
+
+**修复**：`registerComponent()` 添加 `level.isClientSide()` 检查，与 `reregisterComponent()` 行为一致。防止纯客户端联机时在客户端侧误注册部件。之前仅有注释说"仅在服务端执行"但没有实际限制。
