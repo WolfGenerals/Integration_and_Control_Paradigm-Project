@@ -11,6 +11,7 @@ import net.minecraft.core.Direction;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.ItemInteractionResult;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.BlockGetter;
@@ -28,20 +29,37 @@ import net.minecraft.world.phys.shapes.VoxelShape;
 /**
  * TurretBaseBlock —— 炮塔底座方块（地毯状，Create 动力学方块）。
  * <p>
- * 放置后属于车体 SubLevel，右键（空手）触发炮塔装配流程：
- * 生成砂轮 SubLevel（水平旋转/方向机）和避雷针 SubLevel（俯仰/高低机）。
- * 形状类似地毯（1/16 格高），玩家可以站在上面。
+ * 放置时自动召唤砂轮 SubLevel（水平旋转/方向机）和避雷针 SubLevel（俯仰/高低机）。
+ * 右键（空手）可切换拆卸/重新装配。形状类似地毯（1/16 格高），玩家可以站在上面。
  * <p>
- * 同时也是 Create 动力学方块 + 齿轮（ICogWheel），
- * 四个侧面可以接入齿轮驱动，RPM 通过约束电机驱动炮塔旋转。
+ * 同时也是 Create 动力学方块 + 齿轮（ICogWheel）， 四个侧面可以接入齿轮驱动，RPM 通过约束电机驱动炮塔旋转。
  */
 public class TurretBaseBlock extends KineticBlock implements IBE<TurretBaseBlockEntity>, ICogWheel {
 
-    /** 地毯形状：1/16 格高 */
+    /**
+     * 地毯形状：1/16 格高
+     */
     private static final VoxelShape SHAPE = Shapes.box(0.0, 0.0, 0.0, 1.0, 1.0 / 16.0, 1.0);
 
     public TurretBaseBlock(Properties properties) {
         super(properties);
+    }
+
+    /**
+     * 放置时自动召唤炮塔（砂轮 + 避雷针 SubLevel）。 玩家放置底座后立即装配，无需额外右键操作。
+     */
+    @Override
+    public void setPlacedBy(Level level, BlockPos pos, BlockState state, @Nullable LivingEntity placer, ItemStack stack) {
+        super.setPlacedBy(level, pos, state, placer, stack);
+        if (level.isClientSide) {
+            return;
+        }
+        this.withBlockEntityDo(level, pos, be -> {
+            if (!be.isAssembled()) {
+                IACP.LOGGER.info("[TurretBaseBlock] setPlacedBy: 自动装配 @ {}", pos);
+                be.assemble();
+            }
+        });
     }
 
     @Override
@@ -69,23 +87,26 @@ public class TurretBaseBlock extends KineticBlock implements IBE<TurretBaseBlock
 
     @Override
     protected ItemInteractionResult useItemOn(ItemStack stack, BlockState state, Level level, BlockPos pos,
-                                               Player player, InteractionHand hand, BlockHitResult hit) {
+            Player player, InteractionHand hand, BlockHitResult hit) {
         // 用物品右键 → 交给默认行为（比如放置方块）
         return ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION;
     }
 
     @Override
     protected InteractionResult useWithoutItem(BlockState state, Level level, BlockPos pos,
-                                                Player player, BlockHitResult hit) {
-        if (!player.mayBuild())
+            Player player, BlockHitResult hit) {
+        if (!player.mayBuild()) {
             return InteractionResult.FAIL;
-        if (player.isShiftKeyDown())
+        }
+        if (player.isShiftKeyDown()) {
             return InteractionResult.FAIL;
+        }
         // 空手右键触发装配/拆卸（1.21.1 空手交互走此方法）
         IACP.LOGGER.info("[TurretBaseBlock] useWithoutItem @ {} client={} player={}",
                 pos, level.isClientSide, player.getName().getString());
-        if (level.isClientSide)
+        if (level.isClientSide) {
             return InteractionResult.SUCCESS;
+        }
         this.withBlockEntityDo(level, pos, be -> {
             IACP.LOGGER.info("[TurretBaseBlock] 回调 BE：assembled={}", be.isAssembled());
             if (be.isAssembled()) {
