@@ -60,7 +60,7 @@ public interface ComponentHost {
             return;
         }
         Level level = be.getLevel();
-        if (level == null) {
+        if (level == null || level.isClientSide()) {
             return;
         }
 
