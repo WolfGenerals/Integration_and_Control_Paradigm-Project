@@ -8,6 +8,8 @@
 package com.hainabaichuan75.iac_p.content.blocks.suspension_test;
 
 import com.hainabaichuan75.iac_p.IACP;
+import com.hainabaichuan75.iac_p.affiliation.ComponentHost;
+import com.hainabaichuan75.iac_p.affiliation.ComponentRole;
 import com.hainabaichuan75.iac_p.content.blocks.cockpit.CockpitBlock;
 import com.hainabaichuan75.iac_p.content.blocks.cockpit.CockpitBlockEntity;
 import com.hainabaichuan75.iac_p.events.SubLevelScanner;
@@ -50,36 +52,52 @@ import org.joml.Vector3dc;
 import java.util.List;
 
 import static com.hainabaichuan75.iac_p.content.blocks.suspension_test.SuspensionConstants.*;
-public class SuspensionTestBlockEntity extends SmartBlockEntity implements BlockEntitySubLevelActor {
+
+public class SuspensionTestBlockEntity extends SmartBlockEntity implements BlockEntitySubLevelActor, ComponentHost {
+
+    // ==================================================================
+    //  ComponentHost 实现
+    // ==================================================================
+    @Override
+    public ComponentRole getComponentRole() {
+        return ComponentRole.SUSPENSION;
+    }
+
+    @Override
+    public void onLoad() {
+        super.onLoad();
+        ComponentHost.registerComponent(this, getComponentRole());
+    }
+
+    @Override
+    public void onChunkUnloaded() {
+        ComponentHost.unregisterComponent(this);
+        super.onChunkUnloaded();
+    }
 
     // ====================================================================
     //  所有编译时常量已提取到 SuspensionConstants.java。
     //  通过静态导入 `import static ...SuspensionConstants.*` 访问。
     // ====================================================================
     // ====================================================================
-
     // ---- 力学参数、转向参数、差速器参数等全部在 SuspensionConstants 中 ----
-
-   
-
     // ====================================================================
     //  轮胎物理参数 —— 编译时常量见 SuspensionConstants，运行时仅胎压
     // ====================================================================
-
     // ---- 运行时轮胎参数（NBT 持久化，C 键菜单可编辑） ----
     // 胎压（打多少气）是玩家唯一可调的运行时参数。
     private double nominalPressure = DEFAULT_NOMINAL_PRESSURE;
 
     // 渲染器访问器：常量访问方法已移至 SuspensionConstants
-
     // ====================================================================
     //  运行时状态字段
     // ====================================================================
-
     // ---- 轮子物品 ----
     private ItemStack heldItem = ItemStack.EMPTY;
 
-    /** 外部设置的目标转向角（弧度），由 WASD 控制等外部系统写入 */
+    /**
+     * 外部设置的目标转向角（弧度），由 WASD 控制等外部系统写入
+     */
     private double targetSteeringYaw = 0.0;
 
     // 物理状态
@@ -96,42 +114,53 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
     private final ForceTotal forceTotal = new ForceTotal();
 
     // ===== 载具按键绑定（每个方块独立配置，持久化到 NBT） =====
-    private String keyForward   = SuspensionConstants.DEFAULT_KEY_FORWARD;
-    private String keyBackward  = SuspensionConstants.DEFAULT_KEY_BACKWARD;
-    private String keyLeft      = SuspensionConstants.DEFAULT_KEY_LEFT;
-    private String keyRight     = SuspensionConstants.DEFAULT_KEY_RIGHT;
-    private String keyBrake     = SuspensionConstants.DEFAULT_KEY_BRAKE;
+    private String keyForward = SuspensionConstants.DEFAULT_KEY_FORWARD;
+    private String keyBackward = SuspensionConstants.DEFAULT_KEY_BACKWARD;
+    private String keyLeft = SuspensionConstants.DEFAULT_KEY_LEFT;
+    private String keyRight = SuspensionConstants.DEFAULT_KEY_RIGHT;
+    private String keyBrake = SuspensionConstants.DEFAULT_KEY_BRAKE;
 
     // ===== 智能映射按键（WASD 智能映射系统分配，不与手动按键冲突） =====
     // 当 smartKey* 非空时优先使用，否则回退到手动 key*
-    private String smartKeyForward   = "";
-    private String smartKeyBackward  = "";
-    private String smartKeyLeft      = "";
-    private String smartKeyRight     = "";
-    private String smartKeyBrake     = "";
+    private String smartKeyForward = "";
+    private String smartKeyBackward = "";
+    private String smartKeyLeft = "";
+    private String smartKeyRight = "";
+    private String smartKeyBrake = "";
 
     // ===== 运行时控制输入（由 VehicleControlC2SPacket 写入，物理 tick 读取） =====
-    /** 油门正向（前进）是否激活。不再直接将 activeRpm 设为固定值，
-     * 而是由物理 tick 从座舱动力系统读取目标 RPM。 */
+    /**
+     * 油门正向（前进）是否激活。不再直接将 activeRpm 设为固定值， 而是由物理 tick 从座舱动力系统读取目标 RPM。
+     */
     private boolean throttleForward = false;
-    /** 油门反向（后退）是否激活。 */
+    /**
+     * 油门反向（后退）是否激活。
+     */
     private boolean throttleBackward = false;
-    /** 是否正在刹车 */
+    /**
+     * 是否正在刹车
+     */
     private boolean braking = false;
 
     // ===== 引擎负载报告（供 CockpitBE 读取） =====
-    /** P 控制器原始力需求（摩擦圆约束前），供座舱计算引擎负载 */
+    /**
+     * P 控制器原始力需求（摩擦圆约束前），供座舱计算引擎负载
+     */
     private double pControllerDemand = 0.0;
-    /** 滚动阻力幅值，供座舱计算引擎负载 */
+    /**
+     * 滚动阻力幅值，供座舱计算引擎负载
+     */
     private double rollingResistanceMag = 0.0;
 
     // ===== 缓存优化：避免每物理 tick 全量 SubLevel 扫描 =====
-    /** 缓存的驾驶舱引用。null = 需要首次扫描刷新。
-     *  驾驶过程中 SubLevel 构成不变，缓存后无需定期失效。 */
+    /**
+     * 缓存的驾驶舱引用。null = 需要首次扫描刷新。 驾驶过程中 SubLevel 构成不变，缓存后无需定期失效。
+     */
     private CockpitBlockEntity cachedCockpit = null;
 
-    /** 缓存的轮子总数。0 = 需要首次扫描刷新。
-     *  与 cachedCockpit 同时刷新，确保一致性。 */
+    /**
+     * 缓存的轮子总数。0 = 需要首次扫描刷新。 与 cachedCockpit 同时刷新，确保一致性。
+     */
     private int cachedWheelCount = 0;
 
     /**
@@ -139,8 +168,8 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
      * <p>
      * 调用时机：
      * <ul>
-     *   <li>上下车时（由外部系统调用）</li>
-     *   <li>部件损坏时（未来扩展：通过 {@link #registerInvalidationHandler} 注册）</li>
+     * <li>上下车时（由外部系统调用）</li>
+     * <li>部件损坏时（未来扩展：通过 {@link #registerInvalidationHandler} 注册）</li>
      * </ul>
      */
     public void invalidateCache() {
@@ -148,14 +177,14 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
         this.cachedWheelCount = 0;
     }
 
-    /** 可扩展的缓存失效事件列表。
-     *  其他系统（如未来的部件损坏系统）可注册 Runnable，
-     *  在需要刷新 SuspensionBE 缓存时被回调。 */
+    /**
+     * 可扩展的缓存失效事件列表。 其他系统（如未来的部件损坏系统）可注册 Runnable， 在需要刷新 SuspensionBE 缓存时被回调。
+     */
     private static final java.util.List<java.util.function.Consumer<java.util.UUID>> INVALIDATION_HANDLERS = new java.util.ArrayList<>();
 
     /**
-     * 注册缓存失效处理器。
-     * 当指定 SubLevel 内的悬挂缓存需要刷新时，传入的 consumer 会被调用。
+     * 注册缓存失效处理器。 当指定 SubLevel 内的悬挂缓存需要刷新时，传入的 consumer 会被调用。
+     *
      * @param handler 接收 SubLevel UUID 的消费者
      */
     public static void registerInvalidationHandler(java.util.function.Consumer<java.util.UUID> handler) {
@@ -163,8 +192,8 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
     }
 
     /**
-     * 通知所有处理器：SubLevel 内的悬挂缓存需要失效。
-     * 由外部系统（PlayerMountTracker、未来部件损坏系统）调用。
+     * 通知所有处理器：SubLevel 内的悬挂缓存需要失效。 由外部系统（PlayerMountTracker、未来部件损坏系统）调用。
+     *
      * @param subLevelUUID 发生变化的 SubLevel UUID
      */
     public static void notifySubLevelChanged(java.util.UUID subLevelUUID) {
@@ -178,11 +207,15 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
      * 由外部系统（PlayerMountTracker）在 mount/dismount 时调用。
      */
     public static void invalidateCachesInSubLevel(net.minecraft.world.level.Level level, java.util.UUID subLevelUUID) {
-        dev.ryanhcode.sable.api.sublevel.SubLevelContainer container =
-                dev.ryanhcode.sable.api.sublevel.SubLevelContainer.getContainer(level);
-        if (container == null) return;
+        dev.ryanhcode.sable.api.sublevel.SubLevelContainer container
+                = dev.ryanhcode.sable.api.sublevel.SubLevelContainer.getContainer(level);
+        if (container == null) {
+            return;
+        }
         dev.ryanhcode.sable.sublevel.SubLevel sl = container.getSubLevel(subLevelUUID);
-        if (sl == null) return;
+        if (sl == null) {
+            return;
+        }
 
         SubLevelScanner.forEachBlock(sl, level, (worldPos, state, be) -> {
             if (be instanceof SuspensionTestBlockEntity sbe) {
@@ -194,47 +227,52 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
     /**
      * 总水平力需求 / 摩擦预算 比率。
      * <ul>
-     *   <li>&lt; 1.0 = 有抓地余量</li>
-     *   <li>= 1.0 = 摩擦圆刚好饱和</li>
-     *   <li>&gt; 1.0 = 力需求超过抓地极限 → 轮子空转/打滑</li>
+     * <li>&lt; 1.0 = 有抓地余量</li>
+     * <li>= 1.0 = 摩擦圆刚好饱和</li>
+     * <li>&gt; 1.0 = 力需求超过抓地极限 → 轮子空转/打滑</li>
      * </ul>
      * 通过 NBT 同步到客户端，用于调试覆盖层显示动力盈余。
      */
     private double frictionDemandRatio = 0.0;
-    /** NBT 同步节流计数器（控制摩擦需求比同步频率） */
+    /**
+     * NBT 同步节流计数器（控制摩擦需求比同步频率）
+     */
     private int frictionSyncCooldown = 0;
-    /** 上次同步到客户端的摩擦需求比值，用于差值检测 */
+    /**
+     * 上次同步到客户端的摩擦需求比值，用于差值检测
+     */
     private double lastSyncedFrictionRatio = -1.0;
 
     // ===== 发动机-轮速耦合数据 =====
     /**
-     * 本轮当前实际轮端 RPM（由 physicsTick 从物理速度推算）。
-     * 供 CockpitBE 读取以计算 coupledRpm = avgWheelRpm × gearRatio，
-     * 实现发动机转速与车轮转速的刚性耦合。
+     * 本轮当前实际轮端 RPM（由 physicsTick 从物理速度推算）。 供 CockpitBE 读取以计算 coupledRpm =
+     * avgWheelRpm × gearRatio， 实现发动机转速与车轮转速的刚性耦合。
      */
     private double currentWheelRpm = 0.0;
 
     // ===== 载荷转移状态 =====
     /**
-     * 上一 tick 的局部坐标系速度，用于计算本 tick 的加速度。
-     * 载荷转移 = f(加速度, 轮位) → 动态调整各轮抓地力。
+     * 上一 tick 的局部坐标系速度，用于计算本 tick 的加速度。 载荷转移 = f(加速度, 轮位) → 动态调整各轮抓地力。
      */
     private final Vector3d prevLocalVelocity = new Vector3d();
-    /** 是否有上一 tick 的速度数据 */
+    /**
+     * 是否有上一 tick 的速度数据
+     */
     private boolean hasPrevVelocity = false;
 
     // ---- 载荷转移参数（见 SuspensionConstants） ----
-
     // ====================================================================
     //  轮胎参数访问器（供配置屏幕和外部使用）
     // ====================================================================
-
-    /** @return 当前胎压（Pa），玩家可调的唯一轮胎参数 */
-    public double getNominalPressure() { return nominalPressure; }
+    /**
+     * @return 当前胎压（Pa），玩家可调的唯一轮胎参数
+     */
+    public double getNominalPressure() {
+        return nominalPressure;
+    }
 
     /**
-     * 设置胎压（由 PressureConfigC2SPacket 调用）。
-     * 保存后标记脏数据并同步到客户端。
+     * 设置胎压（由 PressureConfigC2SPacket 调用）。 保存后标记脏数据并同步到客户端。
      */
     public void setNominalPressure(double nominalPressure) {
         this.nominalPressure = nominalPressure;
@@ -245,33 +283,52 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
     /**
      * @return P 控制器原始力需求（摩擦圆约束前），正值表示正向驱动力需求
      */
-    public double getPControllerDemand() { return pControllerDemand; }
-
-    /** @return 滚动阻力幅值（绝对值，仅大小） */
-    public double getRollingResistanceMag() { return rollingResistanceMag; }
+    public double getPControllerDemand() {
+        return pControllerDemand;
+    }
 
     /**
-     * @return 总引擎负载力需求 = |P控制器需求| + 滚动阻力
-     *         座舱用此值计算引擎负载因子
+     * @return 滚动阻力幅值（绝对值，仅大小）
+     */
+    public double getRollingResistanceMag() {
+        return rollingResistanceMag;
+    }
+
+    /**
+     * @return 总引擎负载力需求 = |P控制器需求| + 滚动阻力 座舱用此值计算引擎负载因子
      */
     public double getTotalEngineLoad() {
         return Math.abs(pControllerDemand) + rollingResistanceMag;
     }
 
-    /** @return 本轮当前实际轮端 RPM（由物理速度推算），供发动机-轮速耦合 */
-    public double getCurrentWheelRpm() { return currentWheelRpm; }
+    /**
+     * @return 本轮当前实际轮端 RPM（由物理速度推算），供发动机-轮速耦合
+     */
+    public double getCurrentWheelRpm() {
+        return currentWheelRpm;
+    }
 
-    /** @return 总水平力需求 / 摩擦预算比率（可超过 1.0，表示打滑程度） */
-    public double getFrictionDemandRatio() { return frictionDemandRatio; }
+    /**
+     * @return 总水平力需求 / 摩擦预算比率（可超过 1.0，表示打滑程度）
+     */
+    public double getFrictionDemandRatio() {
+        return frictionDemandRatio;
+    }
 
-    /** @return 轮子半径（米），无轮子时返回默认 0.5 */
+    /**
+     * @return 轮子半径（米），无轮子时返回默认 0.5
+     */
     public double getWheelRadius() {
-        if (heldItem.isEmpty()) return 0.5;
+        if (heldItem.isEmpty()) {
+            return 0.5;
+        }
         TireLike tire = heldItem.get(OffroadDataComponents.TIRE);
         return tire != null ? tire.radius() : 0.5;
     }
 
-    /** 重置胎压为默认值 */
+    /**
+     * 重置胎压为默认值
+     */
     public void resetPressureToDefault() {
         setNominalPressure(DEFAULT_NOMINAL_PRESSURE);
     }
@@ -281,11 +338,14 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
     }
 
     @Override
-    public void addBehaviours(List<BlockEntityBehaviour> behaviours) {}
+    public void addBehaviours(List<BlockEntityBehaviour> behaviours) {
+    }
 
     // ===== 轮子物品 =====
+    public ItemStack getHeldItem() {
+        return heldItem;
+    }
 
-    public ItemStack getHeldItem() { return heldItem; }
     public void setHeldItem(ItemStack s) {
         this.heldItem = s.copyWithCount(1);
         setChanged();
@@ -293,34 +353,59 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
     }
 
     // ===== 按键绑定存取 =====
+    public String getKeyForward() {
+        return keyForward;
+    }
 
-    public String getKeyForward()   { return keyForward; }
-    public String getKeyBackward()  { return keyBackward; }
-    public String getKeyLeft()      { return keyLeft; }
-    public String getKeyRight()     { return keyRight; }
-    public String getKeyBrake()     { return keyBrake; }
+    public String getKeyBackward() {
+        return keyBackward;
+    }
+
+    public String getKeyLeft() {
+        return keyLeft;
+    }
+
+    public String getKeyRight() {
+        return keyRight;
+    }
+
+    public String getKeyBrake() {
+        return keyBrake;
+    }
 
     /**
-     * 批量设置 5 个按键绑定（由 VehicleKeyConfigC2SPacket 调用）。
-     * 保存后标记脏数据并同步到客户端。
+     * 批量设置 5 个按键绑定（由 VehicleKeyConfigC2SPacket 调用）。 保存后标记脏数据并同步到客户端。
      */
     public void setKeyBindings(String forward, String backward, String left, String right, String brake) {
-        this.keyForward   = forward;
-        this.keyBackward  = backward;
-        this.keyLeft      = left;
-        this.keyRight     = right;
-        this.keyBrake     = brake;
+        this.keyForward = forward;
+        this.keyBackward = backward;
+        this.keyLeft = left;
+        this.keyRight = right;
+        this.keyBrake = brake;
         setChanged();
         sendData();
     }
 
     // ===== 智能映射按键存取 =====
+    public String getSmartKeyForward() {
+        return smartKeyForward;
+    }
 
-    public String getSmartKeyForward()   { return smartKeyForward; }
-    public String getSmartKeyBackward()  { return smartKeyBackward; }
-    public String getSmartKeyLeft()      { return smartKeyLeft; }
-    public String getSmartKeyRight()     { return smartKeyRight; }
-    public String getSmartKeyBrake()     { return smartKeyBrake; }
+    public String getSmartKeyBackward() {
+        return smartKeyBackward;
+    }
+
+    public String getSmartKeyLeft() {
+        return smartKeyLeft;
+    }
+
+    public String getSmartKeyRight() {
+        return smartKeyRight;
+    }
+
+    public String getSmartKeyBrake() {
+        return smartKeyBrake;
+    }
 
     /**
      * @return 生效的前进键：智能映射键非空时优先，否则回退到手动配置
@@ -329,80 +414,85 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
         return smartKeyForward.isEmpty() ? keyForward : smartKeyForward;
     }
 
-    /** @return 生效的后退键 */
+    /**
+     * @return 生效的后退键
+     */
     public String getActiveKeyBackward() {
         return smartKeyBackward.isEmpty() ? keyBackward : smartKeyBackward;
     }
 
-    /** @return 生效的左转键 */
+    /**
+     * @return 生效的左转键
+     */
     public String getActiveKeyLeft() {
         return smartKeyLeft.isEmpty() ? keyLeft : smartKeyLeft;
     }
 
-    /** @return 生效的右转键 */
+    /**
+     * @return 生效的右转键
+     */
     public String getActiveKeyRight() {
         return smartKeyRight.isEmpty() ? keyRight : smartKeyRight;
     }
 
-    /** @return 生效的刹车键 */
+    /**
+     * @return 生效的刹车键
+     */
     public String getActiveKeyBrake() {
         return smartKeyBrake.isEmpty() ? keyBrake : smartKeyBrake;
     }
 
     /**
-     * 批量设置智能映射按键（由 WASD 智能映射系统调用）。
-     * 设置后对应方块将使用 smartKey 而非手动 key。
+     * 批量设置智能映射按键（由 WASD 智能映射系统调用）。 设置后对应方块将使用 smartKey 而非手动 key。
      */
     public void setSmartKeyBindings(String forward, String backward, String left, String right, String brake) {
-        this.smartKeyForward   = forward;
-        this.smartKeyBackward  = backward;
-        this.smartKeyLeft      = left;
-        this.smartKeyRight     = right;
-        this.smartKeyBrake     = brake;
+        this.smartKeyForward = forward;
+        this.smartKeyBackward = backward;
+        this.smartKeyLeft = left;
+        this.smartKeyRight = right;
+        this.smartKeyBrake = brake;
         setChanged();
         sendData();
     }
 
     /**
-     * 清除所有智能映射按键，回退到手动配置。
-     * 下车或重新扫描方向时调用。
+     * 清除所有智能映射按键，回退到手动配置。 下车或重新扫描方向时调用。
      */
     public void resetSmartKeys() {
-        this.smartKeyForward   = "";
-        this.smartKeyBackward  = "";
-        this.smartKeyLeft      = "";
-        this.smartKeyRight     = "";
-        this.smartKeyBrake     = "";
+        this.smartKeyForward = "";
+        this.smartKeyBackward = "";
+        this.smartKeyLeft = "";
+        this.smartKeyRight = "";
+        this.smartKeyBrake = "";
         setChanged();
         sendData();
     }
 
     // ===== 控制输入（由 VehicleControlC2SPacket 每 tick 写入） =====
-
     /**
      * @return 刹车踏板是否被踩下
      */
-    public boolean isBraking() { return braking; }
+    public boolean isBraking() {
+        return braking;
+    }
 
     /**
-     * 将所有控制输入重置为松开状态（可选保留刹车）。
-     * 玩家下车时调用，防止输入状态残留导致载具自行运动。
+     * 将所有控制输入重置为松开状态（可选保留刹车）。 玩家下车时调用，防止输入状态残留导致载具自行运动。
      * 如果玩家下车前拉了手刹（空格），则保留刹车让载具保持静止。
      */
     public void resetControlInput(boolean keepBrake) {
         this.throttleForward = false;
         this.throttleBackward = false;
-        if (!keepBrake) this.braking = false;
+        if (!keepBrake) {
+            this.braking = false;
+        }
         this.targetSteeringYaw = 0.0;
     }
 
     /**
-     * 应用控制输入状态。
-     * 客户端检测到按键按下/抬起变化后发送此数据，
-     * 服务端据此调整油门状态和转向目标。
+     * 应用控制输入状态。 客户端检测到按键按下/抬起变化后发送此数据， 服务端据此调整油门状态和转向目标。
      * <p>
-     * 油门状态写入共享 Map，由座舱在 {@code tick()} 中读取，
-     * 不受 BE tick 顺序或物理 tick 时序影响。
+     * 油门状态写入共享 Map，由座舱在 {@code tick()} 中读取， 不受 BE tick 顺序或物理 tick 时序影响。
      */
     public void applyControlInput(boolean forward, boolean backward, boolean left, boolean right, boolean brake) {
         // 油门状态：forward/backward 互斥，同时按下时视为无输入
@@ -419,7 +509,6 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
 
         // 不再需要通过共享 Map 报告油门——CockpitBE.tick() 现在直接扫描
         // 悬挂方块的 throttleForward/Backward 字段，零时序冲突。
-
         // 转向：left/right 互斥，同时按下时回中
         if (left && !right) {
             setTargetSteeringYaw(Math.toRadians(MAX_STEERING_ANGLE));
@@ -433,30 +522,43 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
         this.braking = brake;
     }
 
-    /** @return 是否有正向油门输入 */
-    public boolean isThrottleForward() { return throttleForward; }
-    /** @return 是否有反向油门输入 */
-    public boolean isThrottleBackward() { return throttleBackward; }
-    /** @return 是否有任何油门输入 */
-    public boolean hasThrottle() { return throttleForward || throttleBackward; }
+    /**
+     * @return 是否有正向油门输入
+     */
+    public boolean isThrottleForward() {
+        return throttleForward;
+    }
+
+    /**
+     * @return 是否有反向油门输入
+     */
+    public boolean isThrottleBackward() {
+        return throttleBackward;
+    }
+
+    /**
+     * @return 是否有任何油门输入
+     */
+    public boolean hasThrottle() {
+        return throttleForward || throttleBackward;
+    }
 
     // ===== NBT =====
-
-    private static final String TAG_KEY_FORWARD  = "KeyForward";
+    private static final String TAG_KEY_FORWARD = "KeyForward";
     private static final String TAG_KEY_BACKWARD = "KeyBackward";
-    private static final String TAG_KEY_LEFT     = "KeyLeft";
-    private static final String TAG_KEY_RIGHT    = "KeyRight";
-    private static final String TAG_KEY_BRAKE    = "KeyBrake";
+    private static final String TAG_KEY_LEFT = "KeyLeft";
+    private static final String TAG_KEY_RIGHT = "KeyRight";
+    private static final String TAG_KEY_BRAKE = "KeyBrake";
 
     // 智能映射按键 NBT 标签
-    private static final String TAG_SMART_KEY_FORWARD  = "SmartKeyForward";
+    private static final String TAG_SMART_KEY_FORWARD = "SmartKeyForward";
     private static final String TAG_SMART_KEY_BACKWARD = "SmartKeyBackward";
-    private static final String TAG_SMART_KEY_LEFT     = "SmartKeyLeft";
-    private static final String TAG_SMART_KEY_RIGHT    = "SmartKeyRight";
-    private static final String TAG_SMART_KEY_BRAKE    = "SmartKeyBrake";
+    private static final String TAG_SMART_KEY_LEFT = "SmartKeyLeft";
+    private static final String TAG_SMART_KEY_RIGHT = "SmartKeyRight";
+    private static final String TAG_SMART_KEY_BRAKE = "SmartKeyBrake";
 
     // 轮胎参数 NBT 标签（仅保留胎压，其余由轮胎款式决定）
-    private static final String TAG_NOMINAL_PRESSURE      = "NominalPressure";
+    private static final String TAG_NOMINAL_PRESSURE = "NominalPressure";
     private static final String TAG_FRICTION_DEMAND_RATIO = "FrictionDemandRatio";
 
     @Override
@@ -464,54 +566,82 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
         super.write(t, r, cp);
         t.put("HeldItem", this.heldItem.saveOptional(r));
         // 持久化按键绑定
-        t.putString(TAG_KEY_FORWARD,  this.keyForward);
+        t.putString(TAG_KEY_FORWARD, this.keyForward);
         t.putString(TAG_KEY_BACKWARD, this.keyBackward);
-        t.putString(TAG_KEY_LEFT,     this.keyLeft);
-        t.putString(TAG_KEY_RIGHT,    this.keyRight);
-        t.putString(TAG_KEY_BRAKE,    this.keyBrake);
+        t.putString(TAG_KEY_LEFT, this.keyLeft);
+        t.putString(TAG_KEY_RIGHT, this.keyRight);
+        t.putString(TAG_KEY_BRAKE, this.keyBrake);
         // 持久化智能映射按键
-        t.putString(TAG_SMART_KEY_FORWARD,  this.smartKeyForward);
+        t.putString(TAG_SMART_KEY_FORWARD, this.smartKeyForward);
         t.putString(TAG_SMART_KEY_BACKWARD, this.smartKeyBackward);
-        t.putString(TAG_SMART_KEY_LEFT,     this.smartKeyLeft);
-        t.putString(TAG_SMART_KEY_RIGHT,    this.smartKeyRight);
-        t.putString(TAG_SMART_KEY_BRAKE,    this.smartKeyBrake);
+        t.putString(TAG_SMART_KEY_LEFT, this.smartKeyLeft);
+        t.putString(TAG_SMART_KEY_RIGHT, this.smartKeyRight);
+        t.putString(TAG_SMART_KEY_BRAKE, this.smartKeyBrake);
         // 持久化胎压（玩家唯一可调的运行时参数）
-        t.putDouble(TAG_NOMINAL_PRESSURE,     this.nominalPressure);
+        t.putDouble(TAG_NOMINAL_PRESSURE, this.nominalPressure);
         t.putDouble(TAG_FRICTION_DEMAND_RATIO, this.frictionDemandRatio);
     }
 
     @Override
     protected void read(CompoundTag t, HolderLookup.Provider r, boolean cp) {
         super.read(t, r, cp);
-        if (t.contains("HeldItem"))
+        if (t.contains("HeldItem")) {
             this.heldItem = ItemStack.parseOptional(r, t.getCompound("HeldItem"));
+        }
         // 恢复按键绑定
-        if (t.contains(TAG_KEY_FORWARD))  this.keyForward   = t.getString(TAG_KEY_FORWARD);
-        if (t.contains(TAG_KEY_BACKWARD)) this.keyBackward  = t.getString(TAG_KEY_BACKWARD);
-        if (t.contains(TAG_KEY_LEFT))     this.keyLeft      = t.getString(TAG_KEY_LEFT);
-        if (t.contains(TAG_KEY_RIGHT))    this.keyRight     = t.getString(TAG_KEY_RIGHT);
-        if (t.contains(TAG_KEY_BRAKE))    this.keyBrake     = t.getString(TAG_KEY_BRAKE);
+        if (t.contains(TAG_KEY_FORWARD)) {
+            this.keyForward = t.getString(TAG_KEY_FORWARD);
+        }
+        if (t.contains(TAG_KEY_BACKWARD)) {
+            this.keyBackward = t.getString(TAG_KEY_BACKWARD);
+        }
+        if (t.contains(TAG_KEY_LEFT)) {
+            this.keyLeft = t.getString(TAG_KEY_LEFT);
+        }
+        if (t.contains(TAG_KEY_RIGHT)) {
+            this.keyRight = t.getString(TAG_KEY_RIGHT);
+        }
+        if (t.contains(TAG_KEY_BRAKE)) {
+            this.keyBrake = t.getString(TAG_KEY_BRAKE);
+        }
         // 恢复智能映射按键（兼容旧档——无此标签时保持空字符串）
-        if (t.contains(TAG_SMART_KEY_FORWARD))  this.smartKeyForward   = t.getString(TAG_SMART_KEY_FORWARD);
-        if (t.contains(TAG_SMART_KEY_BACKWARD)) this.smartKeyBackward  = t.getString(TAG_SMART_KEY_BACKWARD);
-        if (t.contains(TAG_SMART_KEY_LEFT))     this.smartKeyLeft      = t.getString(TAG_SMART_KEY_LEFT);
-        if (t.contains(TAG_SMART_KEY_RIGHT))    this.smartKeyRight     = t.getString(TAG_SMART_KEY_RIGHT);
-        if (t.contains(TAG_SMART_KEY_BRAKE))    this.smartKeyBrake     = t.getString(TAG_SMART_KEY_BRAKE);
+        if (t.contains(TAG_SMART_KEY_FORWARD)) {
+            this.smartKeyForward = t.getString(TAG_SMART_KEY_FORWARD);
+        }
+        if (t.contains(TAG_SMART_KEY_BACKWARD)) {
+            this.smartKeyBackward = t.getString(TAG_SMART_KEY_BACKWARD);
+        }
+        if (t.contains(TAG_SMART_KEY_LEFT)) {
+            this.smartKeyLeft = t.getString(TAG_SMART_KEY_LEFT);
+        }
+        if (t.contains(TAG_SMART_KEY_RIGHT)) {
+            this.smartKeyRight = t.getString(TAG_SMART_KEY_RIGHT);
+        }
+        if (t.contains(TAG_SMART_KEY_BRAKE)) {
+            this.smartKeyBrake = t.getString(TAG_SMART_KEY_BRAKE);
+        }
         // 恢复胎压（兼容旧档——无此标签时保持默认值，旧版其他轮胎参数标签被忽略）
-        if (t.contains(TAG_NOMINAL_PRESSURE))     this.nominalPressure    = t.getDouble(TAG_NOMINAL_PRESSURE);
-        if (t.contains(TAG_FRICTION_DEMAND_RATIO)) this.frictionDemandRatio = t.getDouble(TAG_FRICTION_DEMAND_RATIO);
+        if (t.contains(TAG_NOMINAL_PRESSURE)) {
+            this.nominalPressure = t.getDouble(TAG_NOMINAL_PRESSURE);
+        }
+        if (t.contains(TAG_FRICTION_DEMAND_RATIO)) {
+            this.frictionDemandRatio = t.getDouble(TAG_FRICTION_DEMAND_RATIO);
+        }
     }
 
     @Override
-    public ClientboundBlockEntityDataPacket getUpdatePacket() { return ClientboundBlockEntityDataPacket.create(this); }
+    public ClientboundBlockEntityDataPacket getUpdatePacket() {
+        return ClientboundBlockEntityDataPacket.create(this);
+    }
+
     @Override
-    public CompoundTag getUpdateTag(HolderLookup.Provider r) { return saveWithoutMetadata(r); }
+    public CompoundTag getUpdateTag(HolderLookup.Provider r) {
+        return saveWithoutMetadata(r);
+    }
 
     // ===== 物理 tick =====
-
     /**
-     * 设置外部目标转向角（弧度）。由 WASD 控制等外部系统调用。
-     * 值会被钳制在 ±MAX_STEERING_ANGLE 范围内。
+     * 设置外部目标转向角（弧度）。由 WASD 控制等外部系统调用。 值会被钳制在 ±MAX_STEERING_ANGLE 范围内。
      */
     public void setTargetSteeringYaw(double radians) {
         this.targetSteeringYaw = Mth.clamp(radians, Math.toRadians(-MAX_STEERING_ANGLE), Math.toRadians(MAX_STEERING_ANGLE));
@@ -520,7 +650,9 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
     @Override
     public void sable$physicsTick(ServerSubLevel sl, RigidBodyHandle handle, double dt) {
         TireLike tire = this.heldItem.get(OffroadDataComponents.TIRE);
-        if (tire == null) return;
+        if (tire == null) {
+            return;
+        }
 
         BlockPos bp = getBlockPos();
         float rad = tire.radius();
@@ -559,7 +691,10 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
         var terr = rayTerrain(fwdD, pose);
         double me = terr.maxExtension();
         this.extension = Mth.lerp(1.0, this.extension, me);
-        if (me > rest + rad + 0.25) { this.extension = rest; return; }
+        if (me > rest + rad + 0.25) {
+            this.extension = rest;
+            return;
+        }
 
         double d = (rest / 6.0) + this.extension;
         double slen = Mth.clamp(d - rad, 0.0, rest);
@@ -571,7 +706,9 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
 
         Vec3i hn = terr.normal().getNormal();
         Vec3 lf = new Vec3(sf * hn.getX(), sf * hn.getY(), sf * hn.getZ());
-        if (terr.subLevel() != null) lf = terr.subLevel().logicalPose().transformNormal(lf);
+        if (terr.subLevel() != null) {
+            lf = terr.subLevel().logicalPose().transformNormal(lf);
+        }
         lf = pose.transformNormalInverse(lf);
         forceVec.set(lf.x, lf.y, lf.z);
 
@@ -581,10 +718,12 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
         // 确保落地时不会瞬间获得巨大抓地力，行驶时又有足够牵引力。
         {
             // 1. 地面摩擦系数
-            if (terr.minInteractingBlock() != null)
+            if (terr.minInteractingBlock() != null) {
                 this.touchFriction = fudge(PhysicsBlockPropertyHelper.getFriction(
-                        this.level.getBlockState(terr.minInteractingBlock())));
-            else this.touchFriction = 1.0;
+                        this.level.getBlockState(terr.minInteractingBlock()))); 
+            }else {
+                this.touchFriction = 1.0;
+            }
 
             // 2. 综合摩擦系数 μ = 轮胎系数 × 地面系数
             double mu = TIRE_FRICTION_COEFFICIENT * this.touchFriction;
@@ -663,7 +802,7 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
                     //       左轮 normX<0 → 负调整(减载) ✓
                     double g = 9.81;
                     double longTransfer = -accelZ * COG_HEIGHT / (g * HALF_WHEELBASE) * normZ;
-                    double latTransfer  = +accelX * COG_HEIGHT / (g * HALF_TRACK) * normX;
+                    double latTransfer = +accelX * COG_HEIGHT / (g * HALF_TRACK) * normX;
 
                     loadTransfer = (longTransfer + latTransfer) * LOAD_TRANSFER_SENSITIVITY;
                     loadTransfer = Mth.clamp(loadTransfer, -0.8, 0.8);
@@ -720,7 +859,7 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
                     double brakeMag = BRAKE_STRENGTH * mu * springImpulse;
                     // 沿总速度反方向分解摩擦力
                     longForce = -(forwardSpeed / totalSpeed) * brakeMag;
-                    latForce  = -(lateralSpeed / totalSpeed) * brakeMag;
+                    latForce = -(lateralSpeed / totalSpeed) * brakeMag;
                 }
                 // totalSpeed ≈ 0：车辆已静止，无需额外力
                 // 刹车时引擎不驱动轮子，负载报告归零
@@ -885,7 +1024,6 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
     }
 
     // ===== 客户端 tick（含转向与轮子旋转） =====
-
     @Override
     public void tick() {
         // === 油门状态由 CockpitBE.tick() 直接扫描 throttleForward/Backward 字段获取 ===
@@ -915,12 +1053,14 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
         }
 
         // 服务端：转向已完成，其余视觉更新仅在客户端执行
-        if (!this.level.isClientSide) return;
+        if (!this.level.isClientSide) {
+            return;
+        }
 
         // === 客户端视觉更新 ===
-
         if (tire == null) {
-            this.angle = 0; this.lastAngle = 0;
+            this.angle = 0;
+            this.lastAngle = 0;
             this.lastExt = this.extension;
             this.extension = Mth.lerp(0.6, this.extension, NO_WHEEL_EXT);
             return;
@@ -976,12 +1116,15 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
     }
 
     // ===== 工具 =====
-
-    private static double fudge(double v) { return v < 1 ? 0.1 + 0.9 * v : v; }
+    private static double fudge(double v) {
+        return v < 1 ? 0.1 + 0.9 * v : v;
+    }
 
     private double compMaxExt(float rad) {
         SubLevel sl = Sable.HELPER.getContaining(this);
-        if (sl == null) return MAX_EXT;
+        if (sl == null) {
+            return MAX_EXT;
+        }
         Direction f = getBlockState().getValue(SuspensionTestBlock.HORIZONTAL_FACING);
         var r = rayTerrain(rotPerp(f.getAxis()), sl.logicalPose());
         double u = r.maxExtension - rad;
@@ -992,12 +1135,16 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
     }
 
     private record TerrainCastResult(double maxExtension, Direction normal,
-                                      @Nullable SubLevel subLevel, @Nullable BlockPos minInteractingBlock) {}
+            @Nullable SubLevel subLevel, @Nullable BlockPos minInteractingBlock) {
+    }
 
     private TerrainCastResult rayTerrain(Vector3dc nd, Pose3dc pose) {
         Direction f = getBlockState().getValue(SuspensionTestBlock.HORIZONTAL_FACING);
         Vec3 c = this.getBlockPos().relative(f).getCenter();
-        double minE = 5.0; Direction minN = Direction.UP; SubLevel minSL = null; BlockPos minBP = null;
+        double minE = 5.0;
+        Direction minN = Direction.UP;
+        SubLevel minSL = null;
+        BlockPos minBP = null;
 
         for (int i = -1; i <= 1; i++) {
             Vec3 o = c.add(JOMLConversion.toMojang(nd).scale(i));
@@ -1005,57 +1152,93 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
                     ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, CollisionContext.empty());
             ((ClipContextExtension) ctx).sable$setIgnoredSubLevel(Sable.HELPER.getContaining(this));
             BlockHitResult hit = this.level.clip(ctx);
-            if (hit.getType() == HitResult.Type.MISS) continue;
+            if (hit.getType() == HitResult.Type.MISS) {
+                continue;
+            }
 
             SubLevel hsl = Sable.HELPER.getContaining(this.level, hit.getLocation());
             Vec3 lh = pose.transformPositionInverse(
                     hsl == null ? hit.getLocation() : hsl.logicalPose().transformPosition(hit.getLocation()));
-            if (lh.y > c.y || o.distanceTo(lh) < 0.05) continue;
+            if (lh.y > c.y || o.distanceTo(lh) < 0.05) {
+                continue;
+            }
             double d = c.y - lh.y;
-            if (d <= 1e-5) continue;
+            if (d <= 1e-5) {
+                continue;
+            }
 
             Vector3d hn = new Vector3d(hit.getDirection().getStepX(), hit.getDirection().getStepY(), hit.getDirection().getStepZ());
-            if (hsl != null) hsl.logicalPose().transformNormal(hn);
+            if (hsl != null) {
+                hsl.logicalPose().transformNormal(hn);
+            }
             pose.transformNormalInverse(hn);
-            if (hn.dot(0, 1, 0) < 0.5) continue;
-            if (d < minE) { minE = d; minN = hit.getDirection(); minSL = hsl; minBP = hit.getBlockPos(); }
+            if (hn.dot(0, 1, 0) < 0.5) {
+                continue;
+            }
+            if (d < minE) {
+                minE = d;
+                minN = hit.getDirection();
+                minSL = hsl;
+                minBP = hit.getBlockPos();
+            }
         }
         return new TerrainCastResult(minE, minN, minSL, minBP);
     }
 
-    private @NotNull Vector3dc rotAxis(Direction.Axis a) {
+    private @NotNull
+    Vector3dc rotAxis(Direction.Axis a) {
         Vec3i d = Direction.get(Direction.AxisDirection.POSITIVE, a).getNormal();
         Vector3d n = new Vector3d(d.getX(), d.getY(), d.getZ());
         n.rotateY(this.chasingYaw);
         return n;
     }
 
-    private @NotNull Vector3dc rotPerp(Direction.Axis a) {
+    private @NotNull
+    Vector3dc rotPerp(Direction.Axis a) {
         Vector3d n = a == Direction.Axis.X ? new Vector3d(0, 0, 1) : new Vector3d(1, 0, 0);
         n.rotateY(this.chasingYaw);
         return n;
     }
 
     // ===== 渲染插值 =====
+    /**
+     * @return 当前转向角（弧度），已包含 STEERING_SPEED 匀速过渡
+     */
+    /**
+     * @return 轮子是否离地（悬挂完全伸展，无地面接触）
+     */
+    public boolean isLifted() {
+        return lifted;
+    }
 
-    /** @return 当前转向角（弧度），已包含 STEERING_SPEED 匀速过渡 */
-    /** @return 轮子是否离地（悬挂完全伸展，无地面接触） */
-    public boolean isLifted() { return lifted; }
+    public double getChasingYaw() {
+        return chasingYaw;
+    }
 
-    public double getChasingYaw() { return chasingYaw; }
-    /** @return 当前目标转向角（弧度），供外部系统（WASD 控制）读写 */
-    public double getTargetSteeringYaw() { return targetSteeringYaw; }
-    public double getLerpedYaw(double pt) { return Mth.lerp(pt, this.lastChasingYaw, this.chasingYaw); }
-    public float getLerpedAngle(float pt) { return (float) Mth.lerp(pt, this.lastAngle, this.angle); }
-    public double getLerpedExtension(float pt) { return Mth.lerp(pt, this.lastExt, this.extension); }
+    /**
+     * @return 当前目标转向角（弧度），供外部系统（WASD 控制）读写
+     */
+    public double getTargetSteeringYaw() {
+        return targetSteeringYaw;
+    }
+
+    public double getLerpedYaw(double pt) {
+        return Mth.lerp(pt, this.lastChasingYaw, this.chasingYaw);
+    }
+
+    public float getLerpedAngle(float pt) {
+        return (float) Mth.lerp(pt, this.lastAngle, this.angle);
+    }
+
+    public double getLerpedExtension(float pt) {
+        return Mth.lerp(pt, this.lastExt, this.extension);
+    }
 
     // ====================================================================
     //  动力系统辅助方法
     // ====================================================================
-
     /**
-     * 获取用于客户端视觉轮子旋转的 RPM 值。
-     * 优先从座舱动力系统读取，降级回退到油门状态决定的固定值。
+     * 获取用于客户端视觉轮子旋转的 RPM 值。 优先从座舱动力系统读取，降级回退到油门状态决定的固定值。
      */
     private double getVisualRpm() {
         SubLevel sl = Sable.HELPER.getContaining(this);
@@ -1068,14 +1251,18 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
             }
         }
         // 降级：无驾驶舱时根据油门状态
-        if (this.throttleForward) return FALLBACK_DRIVE_RPM;
-        if (this.throttleBackward) return -FALLBACK_DRIVE_RPM;
+        if (this.throttleForward) {
+            return FALLBACK_DRIVE_RPM;
+        }
+        if (this.throttleBackward) {
+            return -FALLBACK_DRIVE_RPM;
+        }
         return 0.0;
     }
 
     /**
-     * 在当前 SubLevel 中查找驾驶舱的 BlockEntity。
-     * 遍历 SubLevel 的所有已加载 chunk，寻找 CockpitBlock。
+     * 在当前 SubLevel 中查找驾驶舱的 BlockEntity。 遍历 SubLevel 的所有已加载 chunk，寻找
+     * CockpitBlock。
      */
     @Nullable
     private CockpitBlockEntity findCockpitInSubLevel(SubLevel sl) {
@@ -1089,8 +1276,10 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
         }
 
         SubLevelScanner.forEachBlock(sl, level, (worldPos, state, be) -> {
-            if (this.cachedCockpit != null) return; // 已找到，跳过
-            if (state.getBlock() instanceof CockpitBlock && be instanceof CockpitBlockEntity cockpit) {
+            if (this.cachedCockpit != null) {
+                return; // 已找到，跳过
+
+                        }if (state.getBlock() instanceof CockpitBlock && be instanceof CockpitBlockEntity cockpit) {
                 this.cachedCockpit = cockpit;
             }
         });
@@ -1099,8 +1288,7 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
     }
 
     /**
-     * 统计当前 SubLevel 内悬挂测试方块的总数（用于动力分配扭矩均摊）。
-     * 使用 {@link SubLevelScanner} 统一遍历。
+     * 统计当前 SubLevel 内悬挂测试方块的总数（用于动力分配扭矩均摊）。 使用 {@link SubLevelScanner} 统一遍历。
      */
     private int countSuspensionBlocksInSubLevel(SubLevel sl) {
         // 缓存命中时直接返回（0 表示未缓存）

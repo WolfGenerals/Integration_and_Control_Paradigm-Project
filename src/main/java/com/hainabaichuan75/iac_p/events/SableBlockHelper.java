@@ -1,6 +1,10 @@
 package com.hainabaichuan75.iac_p.events;
 
 import com.hainabaichuan75.iac_p.IACP;
+import com.hainabaichuan75.iac_p.affiliation.AffiliationRegistry;
+import com.hainabaichuan75.iac_p.affiliation.AffiliationTag;
+import com.hainabaichuan75.iac_p.affiliation.RayPolicy;
+import com.hainabaichuan75.iac_p.affiliation.RayType;
 import dev.ryanhcode.sable.Sable;
 import dev.ryanhcode.sable.api.sublevel.SubLevelContainer;
 import dev.ryanhcode.sable.companion.SubLevelAccess;
@@ -327,5 +331,145 @@ public final class SableBlockHelper {
      */
     public static boolean isInAnySubLevel(Level level, BlockPos pos) {
         return Sable.HELPER.getContaining(level, pos) != null;
+    }
+
+    // ==================================================================
+    //  RayType 感知的重载
+    // ==================================================================
+    /**
+     * 沿射线查找所有可能命中的 SubLevel，使用 {@link RayType} 和 {@link AffiliationRegistry}
+     * 自动决定排除/穿透策略。
+     * <p>
+     * 对观察者自身（viewerTag）的 SubLevel 适用 {@link RayPolicy#PENETRATE_AABB} 或
+     * {@link RayPolicy#IGNORE}；对敌对的 SubLevel 适用 {@link RayPolicy#BLOCK} 或
+     * {@link RayPolicy#DAMAGE}。
+     * <p>
+     * 调用方不需要手动构建排除集合。
+     *
+     * @param level 世界
+     * @param from 射线起点（物理世界坐标）
+     * @param to 射线终点（物理世界坐标）
+     * @param rayType 射线类型
+     * @param viewerId 观察者（发出射线的实体）所属的载具 SubLevel UUID，可为 null
+     * @return 最近的方块命中结果（BlockPos 为 plot chunk 局部坐标，Location 为世界坐标）， 无命中或只有穿透的
+     * SubLevel 时返回 null
+     */
+    @Nullable
+    public static BlockHitResult rayTraceSubLevels(Level level, Vec3 from, Vec3 to,
+            RayType rayType, @Nullable UUID viewerId) {
+        if (from.equals(to)) {
+            return null;
+        }
+
+        SubLevelContainer container = SubLevelContainer.getContainer(level);
+        if (container == null) {
+            return null;
+        }
+
+        AffiliationTag viewerTag = viewerId != null ? AffiliationRegistry.getAffiliation(viewerId) : null;
+
+        SubLevelAccess bestAccess = null;
+        BlockHitResult bestHit = null;
+        double bestDistSq = Double.MAX_VALUE;
+
+        for (SubLevel sl : container.getAllSubLevels()) {
+            if (sl.isRemoved()) {
+                continue;
+            }
+
+            UUID slUUID = sl.getUniqueId();
+            AffiliationTag targetTag = AffiliationRegistry.getAffiliation(slUUID);
+
+            // 无归属信息的 SubLevel → 使用默认策略 BLOCK
+            if (targetTag == null) {
+                // 继续检测但不做特殊处理
+            } else {
+                RayPolicy policy = AffiliationRegistry.resolvePolicy(rayType, viewerTag, targetTag);
+                if (policy == RayPolicy.IGNORE) {
+                    continue; // 完全跳过
+                }
+                // PENETRATE_AABB 需要特殊处理：不在这里跳过，而是在命中后判断
+            }
+
+            var physBB = sl.boundingBox();
+            if (physBB == null) {
+                continue;
+            }
+
+            // 快速剔除：AABB 判交
+            Vec3 dir = to.subtract(from).normalize();
+            double maxDist = from.distanceTo(to);
+            Vec3 bbHit = rayAABBIntersection(from, dir,
+                    physBB.minX(), physBB.minY(), physBB.minZ(),
+                    physBB.maxX(), physBB.maxY(), physBB.maxZ());
+            if (bbHit == null) {
+                continue;
+            }
+            if (from.distanceToSqr(bbHit) > maxDist * maxDist) {
+                continue;
+            }
+
+            Pose3dc pose = sl.logicalPose();
+
+            // 将完整射线变换到 SubLevel 局部空间做 clip
+            Vec3 localFrom = pose.transformPositionInverse(from);
+            Vec3 localTo = pose.transformPositionInverse(to);
+            if (localFrom.equals(localTo)) {
+                continue;
+            }
+
+            var clipCtx = new net.minecraft.world.level.ClipContext(
+                    localFrom, localTo,
+                    net.minecraft.world.level.ClipContext.Block.COLLIDER,
+                    net.minecraft.world.level.ClipContext.Fluid.NONE,
+                    CollisionContext.empty());
+            BlockHitResult localHit = level.clip(clipCtx);
+
+            if (localHit != null && localHit.getType() != net.minecraft.world.phys.HitResult.Type.MISS) {
+                // 将命中位置变换回世界空间
+                Vec3 worldHitLoc = pose.transformPosition(localHit.getLocation());
+                double distSq = from.distanceToSqr(worldHitLoc);
+
+                // 对于 PENETRATE_AABB 策略：即使内部方块命中，也检查是否属于可穿透目标
+                if (targetTag != null) {
+                    RayPolicy policy = AffiliationRegistry.resolvePolicy(rayType, viewerTag, targetTag);
+                    if (policy == RayPolicy.PENETRATE_AABB) {
+                        continue; // 穿透整个 SubLevel（外层 AABB + 内部方块均穿透）
+                    }
+                    if (policy == RayPolicy.IGNORE) {
+                        continue; // 安全防护
+                    }
+                }
+
+                if (distSq < bestDistSq) {
+                    bestDistSq = distSq;
+                    bestAccess = sl;
+                    bestHit = new BlockHitResult(
+                            worldHitLoc,
+                            localHit.getDirection(),
+                            localHit.getBlockPos(),
+                            localHit.isInside());
+                }
+            }
+        }
+
+        return bestHit;
+    }
+
+    /**
+     * {@link #rayTraceSubLevels(Level, Vec3, Vec3, Set)} 的便捷重载， 接受
+     * {@link RayType} 和观察者所属载具 UUID，自动构建排除集合。
+     * <p>
+     * 向后兼容：此重载将 RayType 映射为旧式的排除集合。 新代码请使用
+     * {@link #rayTraceSubLevels(Level, Vec3, Vec3, RayType, UUID)}。
+     */
+    @Nullable
+    public static BlockHitResult rayTraceSubLevels(Level level, Vec3 from, Vec3 to,
+            RayType rayType, @Nullable UUID viewerId,
+            @Nullable Set<UUID> extraExclusions) {
+        BlockHitResult result = rayTraceSubLevels(level, from, to, rayType, viewerId);
+        // 如果 RayType 感知的结果不符合预期，用 extraExclusions 过滤
+        // 目前 RayType 处理已足够，此参数保留供未来扩展
+        return result;
     }
 }
