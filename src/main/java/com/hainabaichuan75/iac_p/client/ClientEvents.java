@@ -62,6 +62,7 @@ public class ClientEvents {
     private static final String KEY_VEHICLE_CONFIG = "key.iac_p.vehicle_config";
     private static final String KEY_RAYCAST_FIRE = "key.iac_p.raycast_fire";
     private static final String KEY_DEBUG_GEAR = "key.iac_p.debug_gear";
+    private static final String KEY_STATIONARY_CAM = "key.iac_p.stationary_cam";
 
     private static final Lazy<KeyMapping> MOUNT_KEY = Lazy.of(() -> new KeyMapping(
             KEY_MOUNT,
@@ -92,6 +93,14 @@ public class ClientEvents {
             KeyConflictContext.IN_GAME,
             com.mojang.blaze3d.platform.InputConstants.Type.KEYSYM,
             GLFW.GLFW_KEY_N,
+            KEY_CATEGORY
+    ));
+
+    private static final Lazy<KeyMapping> STATIONARY_CAM_KEY = Lazy.of(() -> new KeyMapping(
+            KEY_STATIONARY_CAM,
+            KeyConflictContext.IN_GAME,
+            com.mojang.blaze3d.platform.InputConstants.Type.KEYSYM,
+            GLFW.GLFW_KEY_V,
             KEY_CATEGORY
     ));
 
@@ -154,6 +163,10 @@ public class ClientEvents {
         return DEBUG_GEAR_KEY.get();
     }
 
+    public static KeyMapping getStationaryCamKey() {
+        return STATIONARY_CAM_KEY.get();
+    }
+
     @SubscribeEvent
     public static void onKeyInput(InputEvent.Key event) {
         var mc = Minecraft.getInstance();
@@ -164,6 +177,13 @@ public class ClientEvents {
         if (MOUNT_KEY.get().consumeClick()) {
             // 按下 F 键 → 发送上车/下车请求到服务端
             ModNetworking.sendToServer(new SeatMountC2SPacket());
+        }
+
+        if (STATIONARY_CAM_KEY.get().consumeClick()) {
+            // 按下 V 键 → 切换哨兵摄像机模式（仅骑乘时有效）
+            if (ClientMountHandler.isMounted()) {
+                ClientMountHandler.toggleStationaryCamera(mc);
+            }
         }
 
         if (VEHICLE_CONFIG_KEY.get().consumeClick()) {
@@ -384,26 +404,36 @@ public class ClientEvents {
 
             // ===== 持续射线检测 + 瞄准 + 开火（每 3 tick 自动 + 鼠标左键） =====
             {
-                Vec3 hitPos = WeaponOverlay.performRaycast();
-
-                // 按住连发（最小间隔 3 tick）
-                if (RAYCAST_FIRE_KEY.get().isDown()
-                        && mc.level.getGameTime() - lastFireGameTime >= FIRE_COOLDOWN_TICKS) {
-                    lastFireGameTime = (int) mc.level.getGameTime();
-                    WeaponOverlay.fireAllTurrets(mc);
-                }
-                String hitType = WeaponOverlay.getLastHitType();
-                if (hitPos != null) {
-                    double dist = Math.sqrt(mc.player.distanceToSqr(hitPos));
-                    mc.player.displayClientMessage(
-                            net.minecraft.network.chat.Component.translatable(
-                                    "message.iac_p.raycast_hit", hitType, dist),
-                            true); // true = action bar
-                    ModNetworking.sendToServer(new TurretTargetC2SPacket(hitPos.x, hitPos.y, hitPos.z));
+                // 哨兵摄像机模式：不发送瞄准坐标，炮塔保持最后瞄准位置
+                if (ClientMountHandler.isCameraStationary()) {
+                    // 仍然允许开火
+                    if (RAYCAST_FIRE_KEY.get().isDown()
+                            && mc.level.getGameTime() - lastFireGameTime >= FIRE_COOLDOWN_TICKS) {
+                        lastFireGameTime = (int) mc.level.getGameTime();
+                        WeaponOverlay.fireAllTurrets(mc);
+                    }
                 } else {
-                    mc.player.displayClientMessage(
-                            net.minecraft.network.chat.Component.translatable("message.iac_p.raycast_miss", hitType),
-                            true);
+                    Vec3 hitPos = WeaponOverlay.performRaycast();
+
+                    // 按住连发（最小间隔 3 tick）
+                    if (RAYCAST_FIRE_KEY.get().isDown()
+                            && mc.level.getGameTime() - lastFireGameTime >= FIRE_COOLDOWN_TICKS) {
+                        lastFireGameTime = (int) mc.level.getGameTime();
+                        WeaponOverlay.fireAllTurrets(mc);
+                    }
+                    String hitType = WeaponOverlay.getLastHitType();
+                    if (hitPos != null) {
+                        double dist = Math.sqrt(mc.player.distanceToSqr(hitPos));
+                        mc.player.displayClientMessage(
+                                net.minecraft.network.chat.Component.translatable(
+                                        "message.iac_p.raycast_hit", hitType, dist),
+                                true); // true = action bar
+                        ModNetworking.sendToServer(new TurretTargetC2SPacket(hitPos.x, hitPos.y, hitPos.z));
+                    } else {
+                        mc.player.displayClientMessage(
+                                net.minecraft.network.chat.Component.translatable("message.iac_p.raycast_miss", hitType),
+                                true);
+                    }
                 }
             }
 

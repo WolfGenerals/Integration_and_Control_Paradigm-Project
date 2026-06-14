@@ -18,12 +18,10 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * Plan B1 核心 Mixin：轨道摄像机 —— 镜头始终对准 SubLevel 焦点，
- * 鼠标控制摄像机在球面上的环绕位置。
+ * Plan B1 核心 Mixin：轨道摄像机 —— 镜头始终对准 SubLevel 焦点， 鼠标控制摄像机在球面上的环绕位置。
  * <p>
- * 原理：{@link Camera#setup(BlockGetter, Entity, boolean, boolean, float)}
- * 在 setup 完成后（@At("TAIL")），将摄像机位置设为 SubLevel 焦点周围的
- * 球坐标位置，再计算从摄像机指向焦点的方向向量，强制设置摄像机旋转，
+ * 原理：{@link Camera#setup(BlockGetter, Entity, boolean, boolean, float)} 在 setup
+ * 完成后（@At("TAIL")），将摄像机位置设为 SubLevel 焦点周围的 球坐标位置，再计算从摄像机指向焦点的方向向量，强制设置摄像机旋转，
  * 实现"镜头始终对准焦点，鼠标控制环绕"的轨道摄像机效果。
  */
 @Mixin(Camera.class)
@@ -38,8 +36,8 @@ public class CameraMixin {
     }
 
     /**
-     * 在 Camera.setup() 完成后，若玩家处于骑乘状态，将摄像机改为轨道模式：
-     * 位置随鼠标在球面上环绕，旋转始终指向 SubLevel 焦点。
+     * 在 Camera.setup() 完成后，若玩家处于骑乘状态，将摄像机改为轨道模式： 位置随鼠标在球面上环绕，旋转始终指向 SubLevel
+     * 焦点。
      * <p>
      * 整个方法包裹在 try-catch 中，防止渲染异常导致游戏卡死。
      */
@@ -50,7 +48,9 @@ public class CameraMixin {
             float partialTick, CallbackInfo ci
     ) {
         try {
-            if (!ClientMountHandler.isMounted()) return;
+            if (!ClientMountHandler.isMounted()) {
+                return;
+            }
 
             ClientSubLevel clientSubLevel = ClientMountHandler.getMountedClientSubLevel();
             if (clientSubLevel == null) {
@@ -61,7 +61,9 @@ public class CameraMixin {
 
             // 使用与渲染完全相同的 partialTick 获取平滑插值位姿
             Pose3dc renderPose = clientSubLevel.renderPose(partialTick);
-            if (renderPose == null) return;
+            if (renderPose == null) {
+                return;
+            }
 
             var renderPos = renderPose.position();
 
@@ -93,6 +95,32 @@ public class CameraMixin {
             }
 
             if (distance > 0.0 && entity != null) {
+                // === 哨兵摄像机模式：位置冻结，始终看向焦点 ===
+                if (ClientMountHandler.isCameraStationary()) {
+                    Vec3 frozenPos = ClientMountHandler.getStationaryCameraPos();
+                    if (frozenPos != null) {
+                        this.setPosition(frozenPos);
+
+                        // 从冻结位置指向焦点
+                        double lookX = focusX - frozenPos.x;
+                        double lookY = focusY - frozenPos.y;
+                        double lookZ = focusZ - frozenPos.z;
+                        double horizontalDist = Math.sqrt(lookX * lookX + lookZ * lookZ);
+
+                        float lookPitch = (float) -Mth.atan2(lookY, Math.max(horizontalDist, 1e-4)) * Mth.RAD_TO_DEG;
+                        float lookYaw;
+                        if (horizontalDist < 1e-4) {
+                            lookYaw = entity.getYRot();
+                        } else {
+                            lookYaw = (float) Mth.atan2(lookZ, lookX) * Mth.RAD_TO_DEG - 90.0F;
+                        }
+                        this.setRotation(lookYaw, lookPitch);
+
+                        IACP.LOGGER.debug("[哨兵摄像机] 追踪焦点 @ {}", frozenPos);
+                        return; // 跳过轨道模式
+                    }
+                }
+
                 // === 轨道模式：摄像机在球面上环绕，始终看向焦点 ===
                 float yaw = entity.getYRot();
                 float pitch = entity.getXRot();
