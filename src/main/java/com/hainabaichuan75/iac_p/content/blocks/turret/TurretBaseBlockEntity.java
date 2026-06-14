@@ -46,8 +46,10 @@ import java.util.UUID;
 /**
  * TurretBaseBlockEntity —— 炮塔底座 BE。
  * <p>
- * 右键后，在底座附近的主世界坐标生成一个原版砂轮的物理化 SubLevel。 再右键一次即可拆卸（移除该 SubLevel）。
- * 这是最简单的"一步到位"方案，后续可扩展更多功能。
+ * 底座放置时通过 {@link TurretBaseBlock#setPlacedBy} 自动装配。 右键（空手）可切换拆卸/重新装配。
+ * <p>
+ * 装配流程：在底座附近生成砂轮 SubLevel（方向机/水平旋转）和 避雷针 SubLevel（高低机/俯仰），通过
+ * RotaryConstraint（方向机） 和 GenericConstraint（高低机，ANGULAR_X 自由）约束连接。
  */
 public class TurretBaseBlockEntity extends KineticBlockEntity {
 
@@ -166,6 +168,17 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
     private double anchorY = 0.0;
     private double anchorZ = 0.0;
 
+    /**
+     * 延迟重建约束的 tick 倒计时。
+     * <p>
+     * 在 {@link #read(CompoundTag, HolderLookup.Provider, boolean)} 中设置为正数， 在
+     * {@link #tick()} 中递减，到 0 时调用 {@link #reestablishConstraints()}。 避免在 chunk
+     * 加载时 SubLevel 容器未完全就绪就尝试重建约束。
+     * <p>
+     * 值 = -1 表示无待处理的重建任务。
+     */
+    private int deferredRebuildTicks = -1;
+
     // ====== 约束锚点偏移常量（可在此调整炮塔铰链位置） ======
     private static final double ANCHOR_ROD_X = 0.0;       // 避雷针端 X（炮管约束点）
     private static final double ANCHOR_ROD_Y = 0.0;       // 避雷针端 Y（0=中心）
@@ -251,6 +264,39 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
         super(ModBlockEntityTypes.TURRET_BASE.get(), pos, state);
     }
 
+    /**
+     * BE 加载完成回调。
+     * <p>
+     * 在 chunk 加载完成、BE 被添加到世界时调用。此时 SubLevel 容器通常已就绪，
+     * 是重建约束的合适时机。如果在此处重建失败（SubLevel 尚未加载）， tick() 中的
+     * {@link #deferredRebuildTicks} 机制会持续重试。
+     */
+    @Override
+    public void onLoad() {
+        super.onLoad();
+        if (this.level != null && !this.level.isClientSide && this.assembled
+                && this.grindstoneSubLevelId != null) {
+            if (this.swivelBearingHandle == null) {
+                IACP.LOGGER.info("[TurretBase] onLoad() 触发约束重建 @ {}", this.worldPosition);
+                reestablishConstraints();
+            }
+            // 检查重建结果：无论上一行是否执行了重建，都检查当前句柄状态
+            boolean yawOk = this.swivelBearingHandle != null && this.swivelBearingHandle.isValid();
+            boolean pitchOk = this.barrelPitchHandle != null && this.barrelPitchHandle.isValid();
+            if (yawOk && pitchOk) {
+                // onLoad() 已成功重建，清除 read() 可能设置的延迟重建
+                this.deferredRebuildTicks = -1;
+                IACP.LOGGER.debug("[TurretBase] onLoad() 约束已就绪 @ {}", this.worldPosition);
+            } else {
+                // 重建失败（SubLevel 容器未就绪或 SubLevel 尚未加载），
+                // 启动 deferredRebuildTicks 持续重试直到成功
+                this.deferredRebuildTicks = 10; // 0.5 秒后首次重试
+                IACP.LOGGER.info("[TurretBase] onLoad() 重建未完全成功 (方向机={}, 高低机={})，启动延迟重试 @ {}",
+                        yawOk, pitchOk, this.worldPosition);
+            }
+        }
+    }
+
     @Override
     public void addBehaviours(List<BlockEntityBehaviour> behaviours) {
         // 目前无特殊行为
@@ -266,6 +312,26 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
 
         if (level == null || level.isClientSide) {
             return;
+        }
+
+        // ====== 延迟约束重建（断线重连修复） ======
+        // 在 read() 或 onLoad() 中设置，经过若干 tick 后执行，
+        // 确保 SubLevel 容器和 SubLevel 已完全加载。
+        // 持续重试直到所有约束句柄都有效，或达到最大重试次数。
+        if (deferredRebuildTicks > 0) {
+            deferredRebuildTicks--;
+            if (deferredRebuildTicks == 0) {
+                IACP.LOGGER.info("[TurretBase] 延迟 tick 触发约束重建 @ {}", this.worldPosition);
+                reestablishConstraints();
+                // 检查重建是否完全成功：如果方向机或高低机句柄仍无效，继续重试
+                boolean yawOk = swivelBearingHandle != null && swivelBearingHandle.isValid();
+                boolean pitchOk = barrelPitchHandle != null && barrelPitchHandle.isValid();
+                if (!yawOk || !pitchOk) {
+                    deferredRebuildTicks = 40; // 2 秒后再次重试
+                    IACP.LOGGER.info("[TurretBase] 约束重建未完全成功 (方向机={}, 高低机={})，2 秒后重试 @ {}",
+                            yawOk, pitchOk, this.worldPosition);
+                }
+            }
         }
 
         // 每 tick 更新方向机 PD 伺服（即使无目标也保持位置）
@@ -1122,9 +1188,13 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
         //  [断线重连修复] 服务端加载时重建约束 + 重新注册归属
         //  世界重载后，SubLevel 仍存在但约束句柄丢失；
         //  归属记录（SubLevelOwnership）也在内存中丢失。
+        //
+        //  ⚠ 重要：不在此处直接调用 reestablishConstraints()，因为 read() 调用时
+        //  SubLevel 容器可能尚未完全就绪（chunk 加载过程中）。
+        //  改为设置 deferredRebuildTicks，由 onLoad() 或 tick() 中的延迟机制执行。
         // ================================================================
         if (!clientPacket && this.level != null && !this.level.isClientSide && this.assembled) {
-            // 重新注册归属：砂轮 + 避雷针 → 载具
+            // 重新注册归属：砂轮 + 避雷针 → 载具（归属注册不依赖容器，可以立即执行）
             if (this.vehicleSubLevelId != null) {
                 if (this.grindstoneSubLevelId != null) {
                     SubLevelOwnership.register(this.grindstoneSubLevelId, this.vehicleSubLevelId);
@@ -1133,8 +1203,12 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
                     SubLevelOwnership.register(this.lightningRodSubLevelId, this.vehicleSubLevelId);
                 }
             }
-            // 重建约束（SubLevel 容器此时应已就绪）
-            reestablishConstraints();
+            // 延迟重建约束：给 SubLevel 容器/SubLevel 加载留出时间
+            // 如果 onLoad() 已经成功重建，此处不会覆盖
+            if (this.deferredRebuildTicks < 0) {
+                this.deferredRebuildTicks = 20; // 默认 1 秒后重试
+                IACP.LOGGER.info("[TurretBase] read() 设置延迟重建约束 @ {} (deferredRebuildTicks=20)", this.worldPosition);
+            }
         }
 
         // ================================================================

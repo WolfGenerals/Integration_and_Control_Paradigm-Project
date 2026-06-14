@@ -1,5 +1,5 @@
 ---
-updated: 2026-06-13
+updated: 2026-06-14
 status: current
 maintainer: @项目协作者
 ---
@@ -7,11 +7,13 @@ maintainer: @项目协作者
 # 5. 炮塔底座 (TurretBase)
 
 ### 概述
-地毯形方块，右键交互在附近生成**物理化砂轮 + 避雷针 SubLevel**，并通过 **RotaryConstraint（旋转轴承）** 将砂轮锚定到载具上。
+地毯形方块，**放置时自动装配**生成**物理化砂轮 + 避雷针 SubLevel**，无需右键。
+右键（空手）可切换拆卸/重新装配。
+通过 **RotaryConstraint（旋转轴承）** 将砂轮锚定到载具上。
 
 ### 装配流程
 ```
-① 右键 → 判断地毯是否在 SubLevel 上
+① 放置底座（自动）→ 判断地毯是否在 SubLevel 上
    ├─ 在载具上：计算地毯世界坐标 + 获取载具姿态
    └─ 在主世界：使用地毯本身坐标
 
@@ -30,6 +32,14 @@ maintainer: @项目协作者
 
 ⑤ 创建避雷针 SubLevel（在附近空位）
 ```
+
+### 交互方式
+| 操作 | 行为 | 实现 |
+|:----|------|------|
+| **放置底座** | 自动装配砂轮+避雷针 | `TurretBaseBlock.setPlacedBy()` → `be.assemble()` |
+| **空手右键** | 已装配→拆卸 / 未装配→装配 | `TurretBaseBlock.useWithoutItem()` → `be.disassemble()` / `be.assemble()` |
+| **破坏方块** | 自动拆卸并清理所有 SubLevel | `TurretBaseBlock.onRemove()` → `be.disassemble()` |
+| **世界重载** | 从 NBT 恢复装配状态，延迟重建约束 | `read()` → `onLoad()` / `tick()` 延迟重建 |
 
 ### 关键安全原则
 | 原则 | 说明 |
