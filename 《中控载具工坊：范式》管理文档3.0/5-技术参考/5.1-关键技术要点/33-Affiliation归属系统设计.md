@@ -1,5 +1,5 @@
 ---
-updated: 2026-06-14 (v2：新增事件机制、调试命令、性能监控、非组内衍生收集)
+updated: 2026-06-14 (v3：新增设计缺口与改进方向)
 status: current
 maintainer: @项目协作者
 ---
@@ -345,3 +345,106 @@ for (Map.Entry<UUID, AffiliationTag> entry : SUBLEVEL_TO_TAG.entrySet()) {
 ### 8.5 ComponentHost 客户端守卫
 
 **修复**：`registerComponent()` 添加 `level.isClientSide()` 检查，与 `reregisterComponent()` 行为一致。防止纯客户端联机时在客户端侧误注册部件。之前仅有注释说"仅在服务端执行"但没有实际限制。
+
+---
+
+## 九、设计缺口与改进方向
+
+> 以下条目来自 2026-06-14 设计审查，标识了当前架构中已知的设计缺口。按优先级排列。
+
+### 9.1 🔴 `onWorldLoad()` 未接入事件总线
+
+**背景**：`AffiliationRegistry.onWorldLoad()` 和 `ComponentRegistry.onWorldLoad()` 均已定义，负责世界加载时清空注册表等待 NBT 重建，但未被任何事件处理器调用。
+
+**风险**：世界重载/维度切换后注册表不会自动重置，旧 SubLevel UUID 数据残留可能导致查询返回过期结果。
+
+**改进方向**：在 `IACP` 构造函数或通过 `@EventBusSubscriber` 监听世界加载事件（如 `LevelEvent.LOAD`），自动调用 `onWorldLoad()`。参考 `PlayerMountTracker` 的 `NeoForge.EVENT_BUS.register()` 注册模式。
+
+### 9.2 🔴 `register()` 非原子操作
+
+**背景**：
+```java
+public static void register(UUID subLevelUUID, AffiliationTag tag) {
+    unregister(subLevelUUID);           // 步骤 1
+    SUBLEVEL_TO_TAG.put(subLevelUUID, tag); // 步骤 2（非原子）
+    // 组索引维护...
+}
+```
+
+**风险**：`unregister` 和 `put` 是两个独立操作。多线程场景下可能出现 A 线程 unregister 后 B 线程抢先注册，然后 A 线程 put 覆盖 B 的竞态条件。
+
+**改进方向**：使用 `synchronized` 块或将整个注册过程封装到 `ConcurrentHashMap.compute()` 原子操作中。
+
+### 9.3 🔴 `faction` 阵营系统未实际启用
+
+**背景**：`isSameFaction()` 要求双方 `faction != FACTION_NEUTRAL(0)` 才认为同阵营，而所有当前代码传入的都是 `FACTION_NEUTRAL`。
+
+**影响**：
+- `resolvePolicy(WEAPON_DAMAGE)` 中的 `sameFaction` 永远为 `false`
+- 友军伤害屏蔽分支从未被执行
+- 阵营扩展预留停留在设计文档层面
+
+**改进方向**：实现简单的阵营分配机制（载具创建时分配、玩家选择、或匹配队列），或明确标记 faction 为"未启用"。
+
+### 9.4 🟡 缺少客户端-服务端安全隔离
+
+**背景**：`AffiliationRegistry` 是全局静态单例，没有区分客户端/服务端实例。`register()` 等写方法在客户端调用时可能导致状态不一致。
+
+**改进方向**：在 `register()` 等写方法中添加服务端守卫（通过 `LogicalSide` 检查），或拆分为 `ClientAffiliationRegistry` / `ServerAffiliationRegistry`。
+
+### 9.5 🟡 NBT 缺少版本号
+
+**背景**：`AffiliationTag.writeToNbt()` / `readFromNbt()` 没有版本控制。未来添加/修改字段时，旧存档 NBT 会静默解析失败（`!tag.contains(TAG_ROLE)` 直接返回 null）。
+
+**改进方向**：添加 `AffiliationVersion` int 字段到 NBT，`readFromNbt()` 中做版本兼容分支。在 Javadoc 中记录每个字段的添加版本。
+
+### 9.6 🟡 `ComponentRegistry` 的 NBT 持久化未实现
+
+**背景**：`ComponentEntry` 有 `writeToNbt()` / `readFromNbt()` 方法，但 `ComponentRegistry` 本身没有 `saveToNbt()` / `loadFromNbt()` 的实现，也没有被任何生命周期钩子调用。
+
+**影响**：世界重载后 ComponentRegistry 完全依赖 BE 的 `onLoad()` 重建，缺乏快照恢复机制。
+
+**改进方向**：实现 `ComponentRegistry.saveToNbt()` / `loadFromNbt()`，在世界保存/加载时调用。
+
+### 9.7 🟡 缺少级联清理机制
+
+**背景**：注销一个 SubLevel 时，其他 SubLevel 中 `vehicleId` 指向该已注销目标的条目不会被自动更新或清理。
+
+**影响**：载具主体被摧毁后，炮塔部件的 `vehicleId` 仍然指向已销毁的 UUID，成为悬挂引用。
+
+**改进方向**：实现级联清理——`unregister()` 时自动查找所有 `vehicleId` 指向当前 UUID 的条目并注销或标记为孤立。
+
+### 9.8 🟢 性能监控仅记录不降级
+
+**背景**：慢查询日志记录了热路径耗时，但没有自适应降级机制。
+
+**改进方向**：可引入 LRU 缓存缓存 `resolvePolicy()` 结果（注意缓存失效策略），或在阈值超限后自动切换到简化路径。
+
+### 9.9 🟢 CAMERA_AIM 矩阵文档与代码不一致
+
+**背景**：文档策略矩阵显示 CAMERA_AIM 对所有角色均为 `PENETRATE_AABB`，但代码对 `PROJECTILE` 和 `SENSOR` 实际返回 `IGNORE`。
+
+**改进方向**：更新文档矩阵以匹配代码实现（弹射物和传感器无内部方块，应完全穿透）。
+
+### 9.10 🟢 缺少测试覆盖
+
+**背景**：核心基础设施（12 个文件、5 个 ConcurrentHashMap、事件系统、NBT 序列化）没有单元测试或集成测试。
+
+**改进方向**：至少为以下场景编写测试：
+- 注册/注销/整组清理的基本路径
+- `getOwnAffiliatedSet()` 的组内+非组内双重收集
+- `resolvePolicy()` 的 3×5 策略矩阵全覆盖
+- NBT 序列化/反序列化往返
+- 世界重载重建场景
+
+### 9.11 🟢 `SubLevelOwnership` 委派层的 Role 退化
+
+**背景**：旧 `SubLevelOwnership.register()` 委派时使用 `AffiliationRole.UNKNOWN`，然后 `TurretBaseBlockEntity` 稍后重新用精确角色覆盖。UNKNOWN 注册期的查询结果不可靠。
+
+**改进方向**：弃用 `SubLevelOwnership` 层直接调用 `AffiliationHelper`，或在委派方法中新增 `AffiliationRole` 参数。
+
+### 9.12 🟢 `list` 调试命令输出有限
+
+**背景**：`/iacp affiliation list` 只显示注册总数和玩家绑定提示，没有列出每个 SubLevel 的概览。`appendPlayerBindings()` 注释说明"无法直接遍历私有 Map"。
+
+**改进方向**：暴露 `SUBLEVEL_TO_TAG.entrySet()` 的不可变快照视图供调试用，或添加专用 `getAllEntries()` 调试方法。

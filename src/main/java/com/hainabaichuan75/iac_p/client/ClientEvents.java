@@ -325,28 +325,6 @@ public class ClientEvents {
     /**
      * 尝试打开炮塔部件（砂轮/避雷针）朝向配置界面。
      */
-    /**
-     * B 键单发开火：摄像机瞄准 + 所有炮台从炮口发射。
-     */
-    private static void fireWeapon(Minecraft mc) {
-        if (!ClientMountHandler.isMounted()) {
-            return;
-        }
-        // 摄像机瞄准（用于炮塔指向）
-        Vec3 hitPos = WeaponOverlay.performRaycast();
-        if (hitPos != null) {
-            ModNetworking.sendToServer(new TurretTargetC2SPacket(hitPos.x, hitPos.y, hitPos.z));
-            String type = WeaponOverlay.getLastHitType();
-            double dist = Math.sqrt(mc.player.distanceToSqr(hitPos));
-            mc.player.displayClientMessage(
-                    net.minecraft.network.chat.Component.translatable(
-                            "message.iac_p.fire_hit", type, dist),
-                    false);
-        }
-        // 所有炮台从炮口发射射线（伤害 + 弹道渲染）
-        WeaponOverlay.fireAllTurrets(mc);
-    }
-
     private static void tryOpenGrindstoneConfigScreen(Minecraft mc) {
         if (mc.player == null || mc.level == null) {
             return;
@@ -413,26 +391,22 @@ public class ClientEvents {
                         WeaponOverlay.fireAllTurrets(mc);
                     }
                 } else {
+                    // 每 tick 射线检测 → 发送命中点世界坐标
+                    // 服务端为每座炮塔独立计算角度：方向机（俯视投影）+ 高低机（侧面投影）
                     Vec3 hitPos = WeaponOverlay.performRaycast();
+                    if (hitPos != null) {
+                        ModNetworking.sendToServer(
+                                new TurretTargetC2SPacket(
+                                        (float) hitPos.x,
+                                        (float) hitPos.y,
+                                        (float) hitPos.z));
+                    }
 
                     // 按住连发（最小间隔 3 tick）
                     if (RAYCAST_FIRE_KEY.get().isDown()
                             && mc.level.getGameTime() - lastFireGameTime >= FIRE_COOLDOWN_TICKS) {
                         lastFireGameTime = (int) mc.level.getGameTime();
                         WeaponOverlay.fireAllTurrets(mc);
-                    }
-                    String hitType = WeaponOverlay.getLastHitType();
-                    if (hitPos != null) {
-                        double dist = Math.sqrt(mc.player.distanceToSqr(hitPos));
-                        mc.player.displayClientMessage(
-                                net.minecraft.network.chat.Component.translatable(
-                                        "message.iac_p.raycast_hit", hitType, dist),
-                                true); // true = action bar
-                        ModNetworking.sendToServer(new TurretTargetC2SPacket(hitPos.x, hitPos.y, hitPos.z));
-                    } else {
-                        mc.player.displayClientMessage(
-                                net.minecraft.network.chat.Component.translatable("message.iac_p.raycast_miss", hitType),
-                                true);
                     }
                 }
             }
@@ -546,5 +520,12 @@ public class ClientEvents {
         }
 
         event.setCanceled(true);
+    }
+
+    // ==================================================================
+    //  工具方法
+    // ==================================================================
+    private static double clamp(double v, double lo, double hi) {
+        return Math.max(lo, Math.min(hi, v));
     }
 }
