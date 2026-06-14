@@ -225,7 +225,7 @@ public class TurretBaseBlockEntity extends KineticBlockEntity implements com.hai
     /**
      * PD 伺服刚度（P 增益）
      */
-    private static final double SERVO_STIFFNESS = 10000.0;
+    private static final double SERVO_STIFFNESS = 5000.0;
 
     /**
      * PD 伺服阻尼（D 增益）。从 16 提升到 100 以强力抑制过冲。
