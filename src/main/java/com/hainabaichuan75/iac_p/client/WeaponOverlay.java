@@ -64,6 +64,11 @@ public class WeaponOverlay {
     private static final double MIN_RAY_DISTANCE = 2.0;
 
     /**
+     * 准星偏向最大锥角（度）。弹道在此锥角内被拉向玩家准星瞄准点， 用于掩饰炮塔旋转延迟带来的命中偏差。
+     */
+    private static final double AIM_BIAS_MAX_DEG = 1.0;
+
+    /**
      * 最后一次射线检测的命中点世界坐标，{@code null} 表示未命中
      */
     private static Vec3 lastHitPos = null;
@@ -220,7 +225,11 @@ public class WeaponOverlay {
                 pose.position().z() + fwd.z * 0.5);
         Vec3 dir = new Vec3(fwd.x, fwd.y, fwd.z);
 
-        // 从炮口沿炮管方向做射线检测
+        // 准星偏向：在 ±1° 锥角内将弹道拉向玩家瞄准点
+        // 掩饰炮塔旋转延迟带来的命中偏差，提升响应感
+        dir = applyAimBias(dir, origin, lastHitPos);
+
+        // 从炮口沿（可能经过偏修正的）方向做射线检测
         // 射线穿透所有 SubLevel 物理外壳，只停在方块/实体碰撞箱上。
         // 实际武器伤害服务端会使用 SableBlockHelper + AffiliationRegistry 重新验证，
         // 客户端结果仅用于弹道渲染视觉和初始瞄准坐标。
@@ -438,6 +447,44 @@ public class WeaponOverlay {
      */
     public static String getLastHitType() {
         return lastHitType;
+    }
+
+    // ==================================================================
+    //  准星偏向锥角
+    // ==================================================================
+    /**
+     * 对射线方向施加准星偏向偏移（最大 {@value #AIM_BIAS_MAX_DEG}°）。
+     * <p>
+     * 如果炮塔实际朝向与准星方向的偏差 ≤ 锥角，弹道完全指向准星瞄准点； 如果偏差 > 锥角，弹道限制到锥角边界。
+     * <p>
+     * 效果：炮塔尚未完全到位时，子弹已偏向准星，提升命中响应感。
+     *
+     * @param barrelDir 炮管实际朝向（单位向量）
+     * @param origin 射线起点（炮口位置）
+     * @param aimPos 玩家准星瞄准点（摄像机射线命中位置），为 {@code null} 时不修正
+     * @return 修正后的射线方向（单位向量）
+     */
+    private static Vec3 applyAimBias(Vec3 barrelDir, Vec3 origin, Vec3 aimPos) {
+        if (aimPos == null) {
+            return barrelDir;
+        }
+        // 从炮口到准星点的理想方向
+        Vec3 wishDir = aimPos.subtract(origin).normalize();
+
+        // 计算炮管与理想方向的夹角
+        double dot = Math.max(-1.0, Math.min(1.0, barrelDir.dot(wishDir)));
+        double angleRad = Math.acos(dot);
+
+        double maxRad = Math.toRadians(AIM_BIAS_MAX_DEG);
+        if (angleRad <= maxRad) {
+            // 偏差在锥角内 → 完全对准准星
+            return wishDir;
+        }
+
+        // 偏差超出锥角 → 限制到锥角边界
+        // 在 barrelDir → wishDir 之间线性插值后归一化
+        double t = maxRad / angleRad;
+        return barrelDir.add(wishDir.subtract(barrelDir).scale(t)).normalize();
     }
 
     // ==================================================================

@@ -1,6 +1,8 @@
 package com.hainabaichuan75.iac_p.network.packets;
 
 import com.hainabaichuan75.iac_p.IACP;
+import com.hainabaichuan75.iac_p.affiliation.ComponentRegistry;
+import com.hainabaichuan75.iac_p.affiliation.ComponentRole;
 import com.hainabaichuan75.iac_p.content.blocks.turret.TurretAimController;
 import com.hainabaichuan75.iac_p.content.blocks.turret.TurretBaseBlockEntity;
 import com.hainabaichuan75.iac_p.events.PlayerMountTracker;
@@ -17,114 +19,222 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.network.chat.Component;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.neoforged.neoforge.network.handling.IPayloadContext;
 
+import dev.ryanhcode.sable.companion.math.Pose3dc;
+import org.joml.Quaterniond;
+import org.joml.Vector3d;
 import java.util.UUID;
 
 /**
- * 炮塔目标位置数据包（客户端 → 服务器）。
- * 当玩家在载具上按下 B 键执行射线检测后，将命中坐标发送到服务端，
- * 由 {@link TurretAimController} 驱动炮塔自动瞄准。
+ * 炮塔瞄准数据包（客户端 → 服务器）。
+ * <p>
+ * 客户端发送射线检测命中点的世界坐标，服务端将所有坐标变换到<b>载具局部空间</b>
+ * 后为每座炮塔独立计算瞄准角度。
+ * <p>
+ * <b>载具局部空间计算</b>：
+ * <ol>
+ * <li>命中点世界坐标 → {@code vPose⁻¹ · (hit - vPos)} 变换到载具局部空间</li>
+ * <li>炮塔（砂轮）世界坐标 → 同样变换到载具局部空间</li>
+ * <li>在局部空间中计算角度，结果天然是载具相对角度，无需额外减去载具偏航</li>
+ * </ol>
+ * <b>角度分离（三维球坐标）</b>：
+ * <ul>
+ * <li>方向机 Yaw（俯视投影 / XZ 平面）：{@code -atan2(dx, dz)}</li>
+ * <li>高低机 Pitch（侧面投影 / 垂直面）：{@code atan2(dy, sqrt(dx²+dz²))}</li>
+ * </ul>
+ * 载具翻转（上下颠倒、侧翻）时，由于全部在载具局部空间计算，角度天然正确。
  */
 public record TurretTargetC2SPacket(
-        double targetX,
-        double targetY,
-        double targetZ
-) implements CustomPacketPayload {
+        float hitX,
+        float hitY,
+        float hitZ
+        ) implements CustomPacketPayload {
 
     public static final ResourceLocation ID = ResourceLocation.fromNamespaceAndPath(IACP.MODID, "turret_target");
     public static final Type<TurretTargetC2SPacket> TYPE = new Type<>(ID);
 
-    public static final StreamCodec<RegistryFriendlyByteBuf, TurretTargetC2SPacket> STREAM_CODEC =
-            new StreamCodec<>() {
-                @Override
-                public TurretTargetC2SPacket decode(RegistryFriendlyByteBuf buf) {
-                    return new TurretTargetC2SPacket(
-                            buf.readDouble(),
-                            buf.readDouble(),
-                            buf.readDouble()
-                    );
-                }
+    public static final StreamCodec<RegistryFriendlyByteBuf, TurretTargetC2SPacket> STREAM_CODEC
+            = new StreamCodec<>() {
+        @Override
+        public TurretTargetC2SPacket decode(RegistryFriendlyByteBuf buf) {
+            return new TurretTargetC2SPacket(
+                    buf.readFloat(),
+                    buf.readFloat(),
+                    buf.readFloat()
+            );
+        }
 
-                @Override
-                public void encode(RegistryFriendlyByteBuf buf, TurretTargetC2SPacket packet) {
-                    buf.writeDouble(packet.targetX);
-                    buf.writeDouble(packet.targetY);
-                    buf.writeDouble(packet.targetZ);
-                }
-            };
+        @Override
+        public void encode(RegistryFriendlyByteBuf buf, TurretTargetC2SPacket packet) {
+            buf.writeFloat(packet.hitX);
+            buf.writeFloat(packet.hitY);
+            buf.writeFloat(packet.hitZ);
+        }
+    };
 
     @Override
     public Type<TurretTargetC2SPacket> type() {
         return TYPE;
     }
 
+    // ==================================================================
+    //  工具：世界 → 载具局部空间变换
+    // ==================================================================
     /**
-     * 服务端处理：查找当前玩家的载具 SubLevel 中的所有炮塔底座，
-     * 设置瞄准目标位置。
+     * 将世界坐标变换到载具局部空间。
+     *
+     * @param vPose 载具 SubLevel 位姿
+     * @param vOrientInv 预计算的载具旋转逆四元数
+     * @param wx 世界 X
+     * @param wy 世界 Y
+     * @param wz 世界 Z
+     * @return 载具局部空间中的 Vector3d
+     */
+    private static Vector3d worldToLocal(Pose3dc vPose,
+            Quaterniond vOrientInv, double wx, double wy, double wz) {
+        return new Vector3d(
+                wx - vPose.position().x(),
+                wy - vPose.position().y(),
+                wz - vPose.position().z()
+        ).rotate(vOrientInv);
+    }
+
+    /**
+     * 驱动单座炮塔瞄准目标点 —— 在载具局部空间中计算。
+     * <p>
+     * 全部坐标变换到载具局部空间后计算，结果天然是载具相对角度：
+     * <ul>
+     * <li>方向机 Yaw = {@code -atan2(dx_local, dz_local)} ← 局部 XZ 平面俯视投影</li>
+     * <li>高低机 Pitch = {@code atan2(dy_local, sqrt(dx²+dz²))} ← 局部侧面投影</li>
+     * </ul>
+     * 载具翻转时，局部空间的「水平面」随载具旋转，角度计算始终正确。
+     */
+    private static void driveTurretAtTarget(TurretBaseBlockEntity tb,
+            Vector3d hitLocal, Vector3d turretLocal) {
+        double dx = hitLocal.x - turretLocal.x;
+        double dy = hitLocal.y - turretLocal.y;
+        double dz = hitLocal.z - turretLocal.z;
+        double horiz = Math.sqrt(dx * dx + dz * dz);
+
+        // ---- 方向机：载具局部 XZ 平面俯视投影 ----
+        float turretYaw = horiz < 0.001 ? 0f
+                : (float) -Math.toDegrees(Math.atan2(dx, dz));
+
+        // ---- 高低机：载具局部侧面投影 ----
+        float turretPitch = (float) Math.toDegrees(Math.atan2(dy, Math.max(horiz, 0.001)));
+
+        TurretAimController.driveAnglesImmediate(tb, turretYaw, turretPitch);
+    }
+
+    /**
+     * 服务端处理：将命中点 + 每座炮塔坐标变换到载具局部空间后计算角度。
+     * <p>
+     * 载具局部空间计算的优势：
+     * <ul>
+     * <li>角度天然是载具相对角度，无需手动减载具偏航</li>
+     * <li>载具翻转（上下颠倒、侧翻）时，局部「水平面」跟随载具，角度计算正确</li>
+     * <li>方向机只看局部 XZ 平面，高低机只看局部侧面投影，互不干扰</li>
+     * </ul>
      */
     public static void handle(final TurretTargetC2SPacket packet, final IPayloadContext context) {
         context.enqueueWork(() -> {
-            if (!(context.player() instanceof ServerPlayer player)) return;
-            if (!PlayerMountTracker.isMounted(player)) return;
+            if (!(context.player() instanceof ServerPlayer player)) {
+                return;
+            }
+            if (!PlayerMountTracker.isMounted(player)) {
+                return;
+            }
 
             ServerLevel level = player.serverLevel();
             SubLevelContainer container = SubLevelContainer.getContainer(level);
-            if (container == null) return;
+            if (container == null) {
+                return;
+            }
 
-            // 获取当前挂载的 SubLevel
             var mountData = PlayerMountTracker.getMountData(player);
-            if (mountData == null) return;
+            if (mountData == null) {
+                return;
+            }
 
-            SubLevel vehicleSubLevel = container.getSubLevel(mountData.subLevelUUID());
-            if (vehicleSubLevel == null) return;
+            UUID vehicleUUID = mountData.subLevelUUID();
+            float hitX = packet.hitX;
+            float hitY = packet.hitY;
+            float hitZ = packet.hitZ;
 
-            // 遍历 SubLevel 中的方块，查找炮塔底座
-            LevelPlot plot = vehicleSubLevel.getPlot();
-            if (plot == null) return;
+            SubLevel vehicleSL = container.getSubLevel(vehicleUUID);
+            if (vehicleSL == null || vehicleSL.isRemoved()) {
+                return;
+            }
 
-            int turretCount = 0;
+            // 预计算载具位姿和逆四元数
+            var vPose = vehicleSL.logicalPose();
+            if (vPose == null) {
+                return;
+            }
+            var vOrientInv = new Quaterniond(vPose.orientation()).conjugate();
+
+            // 变换命中点到载具局部空间（只需做一次）
+            var hitLocal = worldToLocal(vPose, vOrientInv, hitX, hitY, hitZ);
+
+            // ---- 首选：ComponentRegistry O(1) 查找 ----
+            var turretEntries = ComponentRegistry.getComponents(vehicleUUID, ComponentRole.TURRET_BASE);
+            if (!turretEntries.isEmpty()) {
+                for (var entry : turretEntries) {
+                    if (!(entry.blockEntity() instanceof TurretBaseBlockEntity tb)) {
+                        continue;
+                    }
+                    if (!tb.isAssembled()) {
+                        continue;
+                    }
+                    // 获取炮塔（砂轮）位置并变换到载具局部空间
+                    SubLevel gsSL = container.getSubLevel(tb.getGrindstoneSubLevelId());
+                    if (gsSL == null || gsSL.isRemoved()) {
+                        continue;
+                    }
+                    var gsPose = gsSL.logicalPose();
+                    if (gsPose == null) {
+                        continue;
+                    }
+                    var turretLocal = worldToLocal(vPose, vOrientInv,
+                            gsPose.position().x(), gsPose.position().y(), gsPose.position().z());
+                    driveTurretAtTarget(tb, hitLocal, turretLocal);
+                }
+                return;
+            }
+
+            // ---- 回退：chunk 扫描（用地毯位置近似炮塔位置） ----
+            LevelPlot plot = vehicleSL.getPlot();
+            if (plot == null) {
+                return;
+            }
+
             for (PlotChunkHolder chunk : plot.getLoadedChunks()) {
-                BoundingBox3ic localBounds = chunk.getBoundingBox();
-                if (localBounds == null || localBounds == BoundingBox3i.EMPTY) continue;
-
-                int chunkMinX = chunk.getPos().getMinBlockX();
-                int chunkMinZ = chunk.getPos().getMinBlockZ();
-
+                var localBounds = chunk.getBoundingBox();
+                if (localBounds == null || localBounds == BoundingBox3i.EMPTY) {
+                    continue;
+                }
+                int cMinX = chunk.getPos().getMinBlockX();
+                int cMinZ = chunk.getPos().getMinBlockZ();
                 for (int x = localBounds.minX(); x <= localBounds.maxX(); x++) {
                     for (int y = localBounds.minY(); y <= localBounds.maxY(); y++) {
                         for (int z = localBounds.minZ(); z <= localBounds.maxZ(); z++) {
-                            BlockPos worldPos = new BlockPos(x + chunkMinX, y, z + chunkMinZ);
-                            BlockEntity be = level.getBlockEntity(worldPos);
-                            if (be instanceof TurretBaseBlockEntity turret) {
-                                if (!turret.isAssembled()) continue;
-                                turretCount++;
-                                UUID gsUUID = turret.getGrindstoneSubLevelId();
-                                // 设置瞄准目标
-                                TurretAimController.setTarget(
-                                        gsUUID,
-                                        packet.targetX, packet.targetY, packet.targetZ
-                                );
-                                // 给玩家发送反馈
-                                if (turretCount == 1) {
-                                    player.displayClientMessage(
-                                            net.minecraft.network.chat.Component.literal(
-                                                    String.format("§e[炮塔] 目标: (%.0f, %.0f, %.0f)",
-                                                            packet.targetX, packet.targetY, packet.targetZ)),
-                                            true); // action bar
-                                }
+                            BlockPos wp = new BlockPos(x + cMinX, y, z + cMinZ);
+                            BlockEntity be = level.getBlockEntity(wp);
+                            if (!(be instanceof TurretBaseBlockEntity tb)) {
+                                continue;
                             }
+                            if (!tb.isAssembled()) {
+                                continue;
+                            }
+                            // 地毯位置也在载具局部空间计算
+                            var turretLocal = worldToLocal(vPose, vOrientInv,
+                                    wp.getX() + 0.5, wp.getY() + 0.5, wp.getZ() + 0.5);
+                            driveTurretAtTarget(tb, hitLocal, turretLocal);
                         }
                     }
                 }
-            }
-
-            if (turretCount == 0) {
-                player.displayClientMessage(
-                        net.minecraft.network.chat.Component.translatable("message.iac_p.turret_not_found"),
-                        true);
             }
         });
     }

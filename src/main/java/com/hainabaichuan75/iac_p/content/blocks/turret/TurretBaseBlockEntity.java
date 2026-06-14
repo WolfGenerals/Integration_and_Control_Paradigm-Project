@@ -232,7 +232,7 @@ public class TurretBaseBlockEntity extends KineticBlockEntity implements com.hai
      * <p>
      * 代价：运动时略感粘滞，但配合限速轨迹规划（4.5°/tick） 应该影响不大。如果觉得太肉可以调回 50 左右。
      */
-    private static final double SERVO_DAMPING = 50.0;
+    private static final double SERVO_DAMPING = 20.0;
 
     /**
      * 方向机最大转速（度/游戏刻），从 Config 的度/秒值自动换算。
@@ -257,12 +257,12 @@ public class TurretBaseBlockEntity extends KineticBlockEntity implements com.hai
     /**
      * 俯仰 PD 刚度。从 6000 提升到 600000（×1000，与方向机一致），超强瞬停。
      */
-    private static final double PITCH_SERVO_STIFFNESS = 10000.0;
+    private static final double PITCH_SERVO_STIFFNESS = 5000.0;
 
     /**
      * 俯仰 PD 阻尼。对应提升到 1200 以抑制过冲。
      */
-    private static final double PITCH_SERVO_DAMPING = 50.0;
+    private static final double PITCH_SERVO_DAMPING = 20.0;
 
     /**
      * 高低机最大转速（度/游戏刻），从 Config 的度/秒值自动换算。
@@ -418,23 +418,12 @@ public class TurretBaseBlockEntity extends KineticBlockEntity implements com.hai
     /**
      * 设置绝对目标偏航角度（度），由 AimController 每 tick 调用。
      * <p>
-     * 采用<b>限速轨迹规划</b>：不是直接覆写目标角度，而是每 tick 最多向目标 移动 {@link #yawSpeedPerTick()}
-     * 度，保证：
-     * <ul>
-     * <li>距离远时全速旋转</li>
-     * <li>最后 1 tick 精确到位，不超调</li>
-     * <li>避免 PD 伺服收到阶跃目标→惯性过冲</li>
-     * </ul>
-     * 角度差自动归一化到 [-180, 180]。
+     * 直接设目标角度，不限速。平滑物理旋转由 PD 伺服（{@link #updateYawServo()}）的 position-mode
+     * setMotor 自然保证，无需软件层额外限速。
      */
     public void setTargetYawAbsolute(double degrees) {
         this.lastTargetAngleDegrees = this.targetAngleDegrees;
-        double delta = degrees - this.targetAngleDegrees;
-        // 归一化到 [-180, 180]
-        delta = Math.IEEEremainder(delta, 360.0);
-        // 限速
-        double step = Math.copySign(Math.min(Math.abs(delta), yawSpeedPerTick()), delta);
-        this.targetAngleDegrees += step;
+        this.targetAngleDegrees = degrees;
     }
 
     /**
@@ -478,15 +467,11 @@ public class TurretBaseBlockEntity extends KineticBlockEntity implements com.hai
     /**
      * 设置绝对目标俯仰角度（度），由 AimController 每 tick 调用。
      * <p>
-     * 与方向机相同：限速轨迹规划，每 tick 最多移动 {@link #pitchSpeedPerTick()} 度。 正值 = 炮管上仰，负值 =
-     * 炮管下俯。
+     * 与方向机相同：直接设目标角度，不限速。
      */
     public void setTargetPitchAbsolute(double degrees) {
         this.lastTargetPitchAngleDegrees = this.targetPitchAngleDegrees;
-        double delta = degrees - this.targetPitchAngleDegrees;
-        delta = Math.IEEEremainder(delta, 360.0);
-        double step = Math.copySign(Math.min(Math.abs(delta), pitchSpeedPerTick()), delta);
-        this.targetPitchAngleDegrees += step;
+        this.targetPitchAngleDegrees = degrees;
     }
 
     /**
@@ -494,6 +479,35 @@ public class TurretBaseBlockEntity extends KineticBlockEntity implements com.hai
      */
     public double getTargetPitchAngle() {
         return this.targetPitchAngleDegrees;
+    }
+
+    // ==================================================================
+    //  立即驱动：设目标角度 + 立即执行 setMotor（消除 1-tick 延迟）
+    // ==================================================================
+    /**
+     * 立即驱动炮塔到指定角度 —— 设目标 + 立即调用 servo 更新。
+     * <p>
+     * 相比先调用 {@link #setTargetYawAbsolute} / {@link #setTargetPitchAbsolute} 然后等
+     * {@link #tick()} 中的 servo 更新，此方法在设目标后
+     * <b>立即执行 setMotor</b>，消除了一整个 server tick（0~50ms）的等待延迟。
+     * <p>
+     * {@link #tick()} 中的 servo 调用不会重复执行（lastTarget == target 时 angleLerp(1.0,
+     * x, x) = x，无副作用）。
+     */
+    public void driveImmediate(float yawDeg, float pitchDeg) {
+        // 设置方向机目标
+        this.lastTargetAngleDegrees = this.targetAngleDegrees;
+        this.targetAngleDegrees = yawDeg;
+        // 设置高低机目标
+        this.lastTargetPitchAngleDegrees = this.targetPitchAngleDegrees;
+        this.targetPitchAngleDegrees = pitchDeg;
+        // 立即执行 servo 更新（不等待 tick()）
+        if (assembled && swivelBearingHandle != null && swivelBearingHandle.isValid()) {
+            updateYawServo();
+        }
+        if (assembled && barrelPitchHandle != null && barrelPitchHandle.isValid()) {
+            updatePitchServo();
+        }
     }
 
     // ==================================================================
