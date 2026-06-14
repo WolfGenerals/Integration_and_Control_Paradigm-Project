@@ -2,6 +2,10 @@ package com.hainabaichuan75.iac_p.content.blocks.turret;
 
 import com.hainabaichuan75.iac_p.Config;
 import com.hainabaichuan75.iac_p.IACP;
+import com.hainabaichuan75.iac_p.affiliation.AffiliationHelper;
+import com.hainabaichuan75.iac_p.affiliation.AffiliationRegistry;
+import com.hainabaichuan75.iac_p.affiliation.AffiliationRole;
+import com.hainabaichuan75.iac_p.affiliation.AffiliationTag;
 import com.hainabaichuan75.iac_p.events.SubLevelOwnership;
 import com.hainabaichuan75.iac_p.index.ModBlockEntityTypes;
 import com.simibubi.create.content.kinetics.base.KineticBlockEntity;
@@ -51,7 +55,7 @@ import java.util.UUID;
  * 装配流程：在底座附近生成砂轮 SubLevel（方向机/水平旋转）和 避雷针 SubLevel（高低机/俯仰），通过
  * RotaryConstraint（方向机） 和 GenericConstraint（高低机，ANGULAR_X 自由）约束连接。
  */
-public class TurretBaseBlockEntity extends KineticBlockEntity {
+public class TurretBaseBlockEntity extends KineticBlockEntity implements com.hainabaichuan75.iac_p.affiliation.ComponentHost {
 
     // ==================================================================
     //  静态注册表：砂轮 SubLevel UUID → 炮塔底座位置（供网络包查找）
@@ -122,6 +126,14 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
      * 是否已装配
      */
     private boolean assembled = false;
+
+    /**
+     * 炮塔组 UUID（共享耐久池的组标识）。
+     * <p>
+     * 在 {@link #assemble()} 中生成，持久化到 NBT。 同一炮塔的底座/砂轮/避雷针共享同一 groupId。
+     */
+    @Nullable
+    private UUID groupId;
 
     /**
      * 砂轮 SubLevel 的 UUID
@@ -260,6 +272,20 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
     }
 
     // ==================================================================
+    //  ComponentHost 实现
+    // ==================================================================
+    @Override
+    public com.hainabaichuan75.iac_p.affiliation.ComponentRole getComponentRole() {
+        return com.hainabaichuan75.iac_p.affiliation.ComponentRole.TURRET_BASE;
+    }
+
+    @Override
+    public void onChunkUnloaded() {
+        com.hainabaichuan75.iac_p.affiliation.ComponentHost.unregisterComponent(this);
+        super.onChunkUnloaded();
+    }
+
+    // ==================================================================
     public TurretBaseBlockEntity(BlockPos pos, BlockState state) {
         super(ModBlockEntityTypes.TURRET_BASE.get(), pos, state);
     }
@@ -274,6 +300,8 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
     @Override
     public void onLoad() {
         super.onLoad();
+        // 注册到 ComponentRegistry
+        com.hainabaichuan75.iac_p.affiliation.ComponentHost.registerComponent(this, getComponentRole());
         if (this.level != null && !this.level.isClientSide && this.assembled
                 && this.grindstoneSubLevelId != null) {
             if (this.swivelBearingHandle == null) {
@@ -595,9 +623,19 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
         GRINDSTONE_ANCHOR_MAP.put(grindstoneSL.getUniqueId(), new double[]{anchorX, anchorY, anchorZ});
         sendAnchorDataToClients();
 
-        // 注册归属：砂轮 → 载具
+        // ================================================================
+        //  生成炮塔组 ID（用于共享耐久池 + 精确归属注册）
+        // ================================================================
+        this.groupId = UUID.randomUUID();
+
+        // 注册归属：砂轮 → 载具（使用新归属系统，精确角色 TURRET_YAW）
         if (this.vehicleSubLevelId != null) {
-            SubLevelOwnership.register(grindstoneSL.getUniqueId(), this.vehicleSubLevelId);
+            AffiliationHelper.registerTurretPart(
+                    grindstoneSL.getUniqueId(), this.vehicleSubLevelId,
+                    this.groupId, AffiliationRole.TURRET_YAW, AffiliationTag.FACTION_NEUTRAL);
+        } else {
+            // 主世界炮塔：注册到旧系统保持兼容
+            SubLevelOwnership.register(grindstoneSL.getUniqueId(), null);
         }
 
         // ================================================================
@@ -673,8 +711,12 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
                 ROD_OWNER_MAP.put(rodSL.getUniqueId(), this.worldPosition);
                 IACP.LOGGER.info("[TurretBase] 炮管(避雷针) SubLevel UUID={}", rodSL.getUniqueId());
 
-                // 注册归属：避雷针 → 载具
-                if (this.vehicleSubLevelId != null) {
+                // 注册归属：避雷针 → 载具（使用新归属系统，精确角色 TURRET_PITCH）
+                if (this.vehicleSubLevelId != null && this.groupId != null) {
+                    AffiliationHelper.registerTurretPart(
+                            rodSL.getUniqueId(), this.vehicleSubLevelId,
+                            this.groupId, AffiliationRole.TURRET_PITCH, AffiliationTag.FACTION_NEUTRAL);
+                } else {
                     SubLevelOwnership.register(rodSL.getUniqueId(), this.vehicleSubLevelId);
                 }
 
@@ -779,10 +821,15 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
             removeConstraint(this.swivelBearingHandle);
             this.swivelBearingHandle = null;
 
+            // 整组注销（新归属系统）：自动清除组内所有成员的归属记录
+            if (this.groupId != null) {
+                AffiliationRegistry.unregisterGroup(this.groupId);
+                this.groupId = null;
+            }
+
             // 移除砂轮
             // 从静态注册表中移除
             if (this.grindstoneSubLevelId != null) {
-                SubLevelOwnership.unregister(this.grindstoneSubLevelId);
                 GRINDSTONE_OWNER_MAP.remove(this.grindstoneSubLevelId);
                 GRINDSTONE_ANCHOR_MAP.remove(this.grindstoneSubLevelId);
                 GRINDSTONE_LINE_CACHE.remove(this.grindstoneSubLevelId);
@@ -792,7 +839,6 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
 
             // 移除避雷针
             if (this.lightningRodSubLevelId != null) {
-                SubLevelOwnership.unregister(this.lightningRodSubLevelId);
                 ROD_OWNER_MAP.remove(this.lightningRodSubLevelId);
             }
             removeSubLevelById(container, this.lightningRodSubLevelId);
@@ -1110,6 +1156,20 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
             tag.putUUID("VehicleSubLevel", this.vehicleSubLevelId);
         }
         // 锚点坐标持久化
+        // 炮塔组 ID 持久化
+        if (this.groupId != null) {
+            tag.putUUID("TurretGroupId", this.groupId);
+        }
+
+        // 归属标签持久化到 NBT（分布式持久化，用于世界重载后重建注册表）
+        // 注意：底座本身是 BlockEntity，不是 SubLevel，不注册到 AffiliationRegistry
+        // 但持久化 groupId 和 vehicleId 供世界重载后 subLevel 重建归属时使用
+        if (this.vehicleSubLevelId != null) {
+            tag.putUUID(AffiliationHelper.TAG_VEHICLE_ID, this.vehicleSubLevelId);
+            tag.putString(AffiliationHelper.TAG_ROLE, AffiliationRole.TURRET_BASE.name());
+            tag.putInt(AffiliationHelper.TAG_FACTION, AffiliationTag.FACTION_NEUTRAL);
+        }
+
         tag.putDouble("AnchorX", this.anchorX);
         tag.putDouble("AnchorY", this.anchorY);
         tag.putDouble("AnchorZ", this.anchorZ);
@@ -1164,6 +1224,13 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
         } else {
             this.vehicleSubLevelId = null;
         }
+        // 炮塔组 ID
+        if (tag.hasUUID("TurretGroupId")) {
+            this.groupId = tag.getUUID("TurretGroupId");
+        } else {
+            this.groupId = null;
+        }
+
         // 锚点坐标
         this.anchorX = tag.getDouble("AnchorX");
         this.anchorY = tag.getDouble("AnchorY");
@@ -1194,14 +1261,20 @@ public class TurretBaseBlockEntity extends KineticBlockEntity {
         //  改为设置 deferredRebuildTicks，由 onLoad() 或 tick() 中的延迟机制执行。
         // ================================================================
         if (!clientPacket && this.level != null && !this.level.isClientSide && this.assembled) {
-            // 重新注册归属：砂轮 + 避雷针 → 载具（归属注册不依赖容器，可以立即执行）
+            // 重新注册归属（使用新归属系统）：砂轮 + 避雷针 → 载具，含精确角色和组
+            // 归属注册不依赖 SubLevel 容器，可以立即执行
             if (this.vehicleSubLevelId != null) {
-                if (this.grindstoneSubLevelId != null) {
-                    SubLevelOwnership.register(this.grindstoneSubLevelId, this.vehicleSubLevelId);
+                if (this.grindstoneSubLevelId != null && this.groupId != null) {
+                    AffiliationHelper.registerTurretPart(
+                            this.grindstoneSubLevelId, this.vehicleSubLevelId,
+                            this.groupId, AffiliationRole.TURRET_YAW, AffiliationTag.FACTION_NEUTRAL);
                 }
-                if (this.lightningRodSubLevelId != null) {
-                    SubLevelOwnership.register(this.lightningRodSubLevelId, this.vehicleSubLevelId);
+                if (this.lightningRodSubLevelId != null && this.groupId != null) {
+                    AffiliationHelper.registerTurretPart(
+                            this.lightningRodSubLevelId, this.vehicleSubLevelId,
+                            this.groupId, AffiliationRole.TURRET_PITCH, AffiliationTag.FACTION_NEUTRAL);
                 }
+                // 从 NBT 读取的归属角色信息，用于后续重构
             }
             // 延迟重建约束：给 SubLevel 容器/SubLevel 加载留出时间
             // 如果 onLoad() 已经成功重建，此处不会覆盖

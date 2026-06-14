@@ -1,6 +1,8 @@
 package com.hainabaichuan75.iac_p.events;
 
 import com.hainabaichuan75.iac_p.IACP;
+import com.hainabaichuan75.iac_p.affiliation.AffiliationHelper;
+import com.hainabaichuan75.iac_p.affiliation.AffiliationTag;
 import com.hainabaichuan75.iac_p.content.blocks.turret.TurretAimController;
 import com.hainabaichuan75.iac_p.events.PartDamageCache;
 import com.hainabaichuan75.iac_p.index.ModBlocks;
@@ -33,8 +35,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 玩家骑乘状态跟踪器（服务端）。
- * 不创建实体，直接在每 tick 将玩家位置同步到 SubLevel 中心。
+ * 玩家骑乘状态跟踪器（服务端）。 不创建实体，直接在每 tick 将玩家位置同步到 SubLevel 中心。
  * <p>
  * 注意：此类通过 {@code MinecraftForge.EVENT_BUS.register(PlayerMountTracker.class)}
  * 注册到游戏总线，因此不在 {@code @EventBusSubscriber} 中指定 bus 参数。
@@ -45,18 +46,19 @@ public class PlayerMountTracker {
             UUID subLevelUUID,
             double cockpitLocalX, double cockpitLocalY, double cockpitLocalZ,
             double lastPoseX, double lastPoseZ
-    ) {}
+    ) {
+    }
 
     /**
-     * 驾驶舱一次扫描结果。由 {@link #scanSubLevelForCockpit(SubLevel, Level)} 返回，
-     * 替代原本 {@code containsCockpit + hasUniqueCockpit + findCockpitBlockInSubLevel}
+     * 驾驶舱一次扫描结果。由 {@link #scanSubLevelForCockpit(SubLevel, Level)} 返回， 替代原本
+     * {@code containsCockpit + hasUniqueCockpit + findCockpitBlockInSubLevel}
      * 的三次独立扫描。
      *
-     * @param hasCockpit       SubLevel 内是否包含至少一个驾驶舱组
-     * @param isUnique         驾驶舱结构是否唯一（一个组 + 一个下半截）
-     * @param cockpitWorldPos  驾驶舱核心方块的世界坐标（底部中心），无驾驶舱时为 null
-     * @param cockpitGroupId   驾驶舱组索引（ALL_COCKPIT_GROUPS 中的索引），无驾驶舱时为 -1
-     * @param lowerHalfCount   核心下半截方块数量（用于诊断）
+     * @param hasCockpit SubLevel 内是否包含至少一个驾驶舱组
+     * @param isUnique 驾驶舱结构是否唯一（一个组 + 一个下半截）
+     * @param cockpitWorldPos 驾驶舱核心方块的世界坐标（底部中心），无驾驶舱时为 null
+     * @param cockpitGroupId 驾驶舱组索引（ALL_COCKPIT_GROUPS 中的索引），无驾驶舱时为 -1
+     * @param lowerHalfCount 核心下半截方块数量（用于诊断）
      */
     public record CockpitScanResult(
             boolean hasCockpit,
@@ -64,21 +66,25 @@ public class PlayerMountTracker {
             @Nullable BlockPos cockpitWorldPos,
             int cockpitGroupId,
             int lowerHalfCount
-    ) {}
+    ) {
+    }
 
     private static final Map<UUID, MountData> MOUNTED = new ConcurrentHashMap<>();
 
     // ====== 目标 2：SubLevel 占用追踪（谁占用了哪个 SubLevel） ======
-    /** SubLevel UUID → 占用该 SubLevel 的玩家 UUID */
+    /**
+     * SubLevel UUID → 占用该 SubLevel 的玩家 UUID
+     */
     private static final Map<UUID, UUID> SUBLEVEL_OCCUPANTS = new ConcurrentHashMap<>();
 
     // ====== 公开 API ======
-
     public static boolean isMounted(ServerPlayer player) {
         return MOUNTED.containsKey(player.getUUID());
     }
 
-    /** 获取玩家的挂载数据（含 SubLevel UUID）。用于下车时定位 SubLevel。 */
+    /**
+     * 获取玩家的挂载数据（含 SubLevel UUID）。用于下车时定位 SubLevel。
+     */
     public static MountData getMountData(ServerPlayer player) {
         return MOUNTED.get(player.getUUID());
     }
@@ -86,7 +92,7 @@ public class PlayerMountTracker {
     private static final String MOUNTED_NBT_KEY = IACP.MODID + ".mounted";
 
     public static void mount(ServerPlayer player, UUID subLevelUUID,
-                              double cockpitLocalX, double cockpitLocalY, double cockpitLocalZ) {
+            double cockpitLocalX, double cockpitLocalY, double cockpitLocalZ) {
         // 日志移除（性能优化）
         Vector3dc posePos = null;
         // 尝试获取初始位姿位置用于 lastPose
@@ -115,6 +121,19 @@ public class PlayerMountTracker {
         // 使 /kill、/damage 等指令仍能正常作用，而一切非指令伤害被阻挡。
         player.setInvulnerable(true);
 
+        // 注册载具主体归属到 AffiliationRegistry
+        try {
+            SubLevelContainer slc = SubLevelContainer.getContainer(level);
+            if (slc != null) {
+                SubLevel sl = slc.getSubLevel(subLevelUUID);
+                if (sl != null) {
+                    AffiliationHelper.registerVehicleBody(sl, player.getUUID(), AffiliationTag.FACTION_NEUTRAL);
+                }
+            }
+        } catch (Exception e) {
+            IACP.LOGGER.warn("[Mount] 注册载具归属失败（非致命）: {}", e.getMessage());
+        }
+
         IACP.LOGGER.info("Player {} mounted SubLevel {}", player.getName().getString(), subLevelUUID);
     }
 
@@ -122,6 +141,8 @@ public class PlayerMountTracker {
         IACP.LOGGER.info("[ServerMount] unmount() 清理状态表: player={}", player.getName().getString());
         MountData data = MOUNTED.remove(player.getUUID());
         if (data != null) {
+            // 清除载具归属
+            AffiliationHelper.unregisterVehicleBody(data.subLevelUUID(), player.getUUID());
             // 目标 2：清除 SubLevel 占用
             SUBLEVEL_OCCUPANTS.remove(data.subLevelUUID());
             // 部件损坏：清理该 SubLevel 的耐久缓存
@@ -139,7 +160,7 @@ public class PlayerMountTracker {
      * 目标 2：检查 SubLevel 是否已被其他玩家占用。
      *
      * @param subLevelUUID 要检查的 SubLevel UUID
-     * @param player       请求上车的玩家
+     * @param player 请求上车的玩家
      * @return true 如果 SubLevel 已被其他玩家占用
      */
     public static boolean isSubLevelOccupiedByOther(UUID subLevelUUID, ServerPlayer player) {
@@ -148,22 +169,20 @@ public class PlayerMountTracker {
     }
 
     /**
-     * 检查持久化 NBT 中是否有残留的骑乘标记。
-     * 用于检测"上次骑乘退出但未正常下车"的陈旧状态。
+     * 检查持久化 NBT 中是否有残留的骑乘标记。 用于检测"上次骑乘退出但未正常下车"的陈旧状态。
      */
     public static boolean hasStaleMountTag(ServerPlayer player) {
         return player.getPersistentData().getBoolean(MOUNTED_NBT_KEY);
     }
 
     // ====== 目标 1 & 4：SubLevel 内驾驶舱检测 ======
-
     /**
      * 驾驶舱组定义 —— 使用直接方块实例比较，替代 Tag 方式。
      * <p>
      * 每组由一个或多个方块组成，同一组方块视为同一驾驶舱结构：
      * <ul>
-     *   <li>{@code GROUP_GENERAL} — 通用驾驶舱（CockpitBlock + CockpitUpperBlock）</li>
-     *   <li>{@code GROUP_CORE_0} — 初代核心 SeatBlock（单方块）</li>
+     * <li>{@code GROUP_GENERAL} — 通用驾驶舱（CockpitBlock + CockpitUpperBlock）</li>
+     * <li>{@code GROUP_CORE_0} — 初代核心 SeatBlock（单方块）</li>
      * </ul>
      * 后续添加新驾驶舱类型时，在此处注册新组。
      */
@@ -175,10 +194,14 @@ public class PlayerMountTracker {
             ModBlocks.SEAT.get()
     );
 
-    /** 所有驾驶舱组的集合（用于迭代） */
+    /**
+     * 所有驾驶舱组的集合（用于迭代）
+     */
     private static final List<Set<Block>> ALL_COCKPIT_GROUPS = List.of(GROUP_GENERAL, GROUP_CORE_0);
 
-    /** 被视为"核心下半截"的方块（一个组内只能有一个下半截） */
+    /**
+     * 被视为"核心下半截"的方块（一个组内只能有一个下半截）
+     */
     private static final Set<Block> CORE_LOWER_HALVES = Set.of(
             ModBlocks.COCKPIT.get(),
             ModBlocks.SEAT.get()
@@ -187,10 +210,12 @@ public class PlayerMountTracker {
     /**
      * 单次扫描 SubLevel，一次性获取驾驶舱检测所需的所有信息。
      * <p>
-     * 替代原本 {@code findCockpitGroups + containsCockpit + hasUniqueCockpit + findCockpitBlockInSubLevel}
+     * 替代原本
+     * {@code findCockpitGroups + containsCockpit + hasUniqueCockpit + findCockpitBlockInSubLevel}
      * 的四次独立 chunk 扫描。一次遍历完成全部判断。
      * <p>
-     * 使用 {@link SubLevelScanner#forEachBlock(SubLevel, Level, SubLevelScanner.BlockVisitor)}
+     * 使用
+     * {@link SubLevelScanner#forEachBlock(SubLevel, Level, SubLevelScanner.BlockVisitor)}
      * 统一遍历逻辑，消除 boilerplate。
      */
     public static CockpitScanResult scanSubLevelForCockpit(SubLevel subLevel, Level level) {
@@ -229,15 +254,15 @@ public class PlayerMountTracker {
 
         boolean hasCockpit = !groupIds.isEmpty();
         boolean isUnique = hasCockpit
-                && groupIds.size() == 1   // 只有一个驾驶舱组
+                && groupIds.size() == 1 // 只有一个驾驶舱组
                 && lowerHalfCount[0] == 1;   // 只有一个下半截
 
         return new CockpitScanResult(hasCockpit, isUnique, firstCockpitPos[0], firstGroupId[0], lowerHalfCount[0]);
     }
 
     /**
-     * 检查 SubLevel 内是否包含任何驾驶舱核心方块。
-     * 使用 {@link #scanSubLevelForCockpit(SubLevel, Level)} 单次扫描。
+     * 检查 SubLevel 内是否包含任何驾驶舱核心方块。 使用
+     * {@link #scanSubLevelForCockpit(SubLevel, Level)} 单次扫描。
      */
     public static boolean containsCockpit(SubLevel subLevel, Level level) {
         return scanSubLevelForCockpit(subLevel, level).hasCockpit();
@@ -248,8 +273,8 @@ public class PlayerMountTracker {
      * <p>
      * 规则（使用直接方块实例比较 + 单次扫描）：
      * <ul>
-     *   <li>只能存在一个驾驶舱组</li>
-     *   <li>该组内只能有一个"核心下半截"方块</li>
+     * <li>只能存在一个驾驶舱组</li>
+     * <li>该组内只能有一个"核心下半截"方块</li>
      * </ul>
      */
     public static boolean hasUniqueCockpit(SubLevel subLevel, Level level) {
@@ -257,7 +282,6 @@ public class PlayerMountTracker {
     }
 
     // ====== 每 tick 处理 ======
-
     @SubscribeEvent
     public static void onServerTick(ServerTickEvent.Post event) {
         // 驱动炮塔自动瞄准（即使 MOUNTED 为空也可能有残留目标）
@@ -268,13 +292,15 @@ public class PlayerMountTracker {
             }
         }
 
-        if (MOUNTED.isEmpty()) return;
+        if (MOUNTED.isEmpty()) {
+            return;
+        }
 
         // 轻度日志：每 100 tick ≈ 5 秒
         long gameTime = 0;
 
         // 遍历所有已挂载玩家
-        for (var it = MOUNTED.entrySet().iterator(); it.hasNext(); ) {
+        for (var it = MOUNTED.entrySet().iterator(); it.hasNext();) {
             var entry = it.next();
             UUID playerUUID = entry.getKey();
             MountData data = entry.getValue();
@@ -284,6 +310,7 @@ public class PlayerMountTracker {
             if (player == null) {
                 IACP.LOGGER.warn("[ServerMount] 玩家 {} 断线，清理骑乘状态", playerUUID);
                 // 玩家断线 → 先重置悬挂输入（保留刹车），再清理
+                AffiliationHelper.unregisterVehicleBody(data.subLevelUUID(), playerUUID);
                 ServerMountHandler.resetSuspensionInputsByUUID(server, data.subLevelUUID());
                 SUBLEVEL_OCCUPANTS.remove(data.subLevelUUID());
                 it.remove();
@@ -293,6 +320,7 @@ public class PlayerMountTracker {
             // 玩家死亡 → 自动下车 + 重置输入
             if (!player.isAlive()) {
                 IACP.LOGGER.info("[ServerMount] 玩家 {} 死亡，自动下车", player.getName().getString());
+                AffiliationHelper.unregisterVehicleBody(data.subLevelUUID(), player.getUUID());
                 ServerMountHandler.resetSuspensionInputsByUUID(server, data.subLevelUUID());
                 SUBLEVEL_OCCUPANTS.remove(data.subLevelUUID());
                 it.remove();
@@ -315,6 +343,7 @@ public class PlayerMountTracker {
             if (subLevel == null) {
                 IACP.LOGGER.warn("[ServerMount] 玩家 {}: SubLevel {} 已销毁，自动下车",
                         player.getName().getString(), data.subLevelUUID);
+                AffiliationHelper.unregisterVehicleBody(data.subLevelUUID(), player.getUUID());
                 SUBLEVEL_OCCUPANTS.remove(data.subLevelUUID());
                 it.remove();
                 forceDismountClient(server, player);
@@ -376,7 +405,6 @@ public class PlayerMountTracker {
 
             // 额外碰撞保护：setPos() + 零碰撞箱使实体位置缓存随之刷新，
             // 确保物理引擎（含 Sable 的 SubLevelEntityCollision）完全忽略该实体
-
             // 轻度日志：每 100 tick 打印一次
             if (gameTime == 0) {
                 gameTime = level.getGameTime();
@@ -418,16 +446,15 @@ public class PlayerMountTracker {
     }
 
     // ====== 服务端生命周期清理 ======
-
     /**
      * 服务端启动/重启时清理所有残留骑乘状态。
      * <p>
      * 集成服务器重启时，{@link #MOUNTED} 和 {@link #SUBLEVEL_OCCUPANTS} 中的
-     * ConcurrentHashMap 在类加载后仍是空的，无需清理。
-     * 但在某些热加载/reload 场景下可能有残留，保险起见在 server starting 时清空。
+     * ConcurrentHashMap 在类加载后仍是空的，无需清理。 但在某些热加载/reload 场景下可能有残留，保险起见在 server
+     * starting 时清空。
      * <p>
-     * 此方法通过 {@code MinecraftForge.EVENT_BUS} 注册在 {@link IACP#IACP()} 中，
-     * 响应 {@link net.neoforged.neoforge.event.server.ServerStartingEvent}。
+     * 此方法通过 {@code MinecraftForge.EVENT_BUS} 注册在 {@link IACP#IACP()} 中， 响应
+     * {@link net.neoforged.neoforge.event.server.ServerStartingEvent}。
      */
     @SubscribeEvent
     public static void onServerStarting(ServerStartingEvent event) {
@@ -441,22 +468,25 @@ public class PlayerMountTracker {
     }
 
     // ====== 重新进入世界时清理 ======
-
     /**
      * 当玩家实体加入世界时，检查是否处于过期的骑乘状态。
      * <p>
      * 处理两种场景：
      * <ol>
-     *   <li><b>多人重连</b>：MOUNTED 表中可能残留旧数据，验证 SubLevel 是否仍存在。</li>
-     *   <li><b>重新进入（单人/多人）</b>：MOUNTED 表已清空但玩家 NBT 中仍有残留标记，
-     *       此时玩家的 abilities（flying=true, noGravity=true, flyingSpeed=0）
-     *       被从 NBT 恢复，需要清除。</li>
+     * <li><b>多人重连</b>：MOUNTED 表中可能残留旧数据，验证 SubLevel 是否仍存在。</li>
+     * <li><b>重新进入（单人/多人）</b>：MOUNTED 表已清空但玩家 NBT 中仍有残留标记， 此时玩家的
+     * abilities（flying=true, noGravity=true, flyingSpeed=0） 被从 NBT
+     * 恢复，需要清除。</li>
      * </ol>
      */
     @SubscribeEvent
     public static void onEntityJoinLevel(EntityJoinLevelEvent event) {
-        if (!(event.getEntity() instanceof ServerPlayer player)) return;
-        if (event.getLevel().isClientSide()) return;
+        if (!(event.getEntity() instanceof ServerPlayer player)) {
+            return;
+        }
+        if (event.getLevel().isClientSide()) {
+            return;
+        }
 
         MountData data = MOUNTED.get(player.getUUID());
 
@@ -487,7 +517,6 @@ public class PlayerMountTracker {
     }
 
     // ====== 骑乘时禁止交互（服务端强制） ======
-
     @SubscribeEvent
     public static void onRightClickBlock(PlayerInteractEvent.RightClickBlock event) {
         if (event.getEntity() instanceof ServerPlayer sp && isMounted(sp)) {
