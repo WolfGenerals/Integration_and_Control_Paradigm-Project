@@ -720,8 +720,8 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
             // 1. 地面摩擦系数
             if (terr.minInteractingBlock() != null) {
                 this.touchFriction = fudge(PhysicsBlockPropertyHelper.getFriction(
-                        this.level.getBlockState(terr.minInteractingBlock()))); 
-            }else {
+                        this.level.getBlockState(terr.minInteractingBlock())));
+            } else {
                 this.touchFriction = 1.0;
             }
 
@@ -1279,7 +1279,8 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
             if (this.cachedCockpit != null) {
                 return; // 已找到，跳过
 
-                        }if (state.getBlock() instanceof CockpitBlock && be instanceof CockpitBlockEntity cockpit) {
+            }
+            if (state.getBlock() instanceof CockpitBlock && be instanceof CockpitBlockEntity cockpit) {
                 this.cachedCockpit = cockpit;
             }
         });

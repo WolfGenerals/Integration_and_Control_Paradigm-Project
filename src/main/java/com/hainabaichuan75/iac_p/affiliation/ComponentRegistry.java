@@ -7,6 +7,7 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import javax.annotation.Nullable;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -194,12 +195,83 @@ public final class ComponentRegistry {
     }
 
     // ==================================================================
+    //  过期条目清理
+    // ==================================================================
+    /**
+     * 惰性清理——在查询时同步移除 BE 已被销毁的过期条目。
+     * <p>
+     * 由于 {@code SmartBlockEntity.setRemoved()} 是 {@code final} 的， 部分 BE 无法通过重写
+     * {@code setRemoved()} 来自动注销。 此方法在任何查询路径中被调用，确保过期条目不会长期残留。
+     * <p>
+     * 每次构建结果列表时最多清理 {@link #MAX_PURGE_PER_QUERY} 条，
+     * 将平均性能负担分摊到各次查询中，避免单次大量清理的瞬时开销。
+     */
+    private static final int MAX_PURGE_PER_QUERY = 8;
+
+    /**
+     * 遍历指定 SubLevel 的条目，移除 BE 已失效的过期条目。
+     *
+     * @param subUUID SubLevel UUID
+     * @param positions 要检查的 BlockPos 集合（可能为 null）
+     * @return 清理后的有效位置集合（新的不可变 Set），如果未发生清理则返回原集合
+     */
+    @Nullable
+    private static Set<BlockPos> purgeStaleEntries(UUID subUUID, @Nullable Set<BlockPos> positions) {
+        if (positions == null || positions.isEmpty()) {
+            return positions;
+        }
+        Map<BlockPos, ComponentEntry> subMap = BY_SUBLEVEL.get(subUUID);
+        if (subMap == null) {
+            return positions;
+        }
+
+        Set<BlockPos> remaining = ConcurrentHashMap.newKeySet();
+        int purged = 0;
+        for (BlockPos pos : positions) {
+            ComponentEntry entry = subMap.get(pos);
+            if (entry == null) {
+                // 主索引中已不存在 → 从角色索引中移除
+                purged++;
+                continue;
+            }
+            BlockEntity be = entry.blockEntity();
+            if (be == null || be.isRemoved()) {
+                // BE 已被销毁 → 从所有索引中移除
+                unregister(pos);
+                purged++;
+                if (purged >= MAX_PURGE_PER_QUERY) {
+                    // 达到本次限额，将剩余未检查的位置原样保留
+                    remaining.add(pos);
+                    break;
+                }
+                continue;
+            }
+            remaining.add(pos);
+        }
+
+        if (purged == 0) {
+            return positions; // 无清理，返回原引用
+        }
+
+        // 将剩余未遍历的位置也加入
+        for (BlockPos pos : positions) {
+            if (!remaining.contains(pos) && subMap.containsKey(pos)) {
+                remaining.add(pos);
+            }
+        }
+
+        return remaining.isEmpty() ? Collections.emptySet() : Collections.unmodifiableSet(remaining);
+    }
+
+    // ==================================================================
     //  查询
     // ==================================================================
     /**
      * 获取 SubLevel 中指定角色的所有部件。
      * <p>
      * 这是最常用的查询——CockpitBE 用它获取悬挂列表，WeaponOverlay 用它获取武器列表。
+     * <p>
+     * 查询过程中会自动清理 BE 已销毁的过期条目（惰性清理）。
      *
      * @param subUUID SubLevel UUID
      * @param role 角色过滤（null 返回全部）
@@ -216,7 +288,26 @@ public final class ComponentRegistry {
         }
 
         if (role == null) {
-            return List.copyOf(subMap.values());
+            // 惰性清理：遍历并返回有效条目的快照
+            List<ComponentEntry> result = new ArrayList<>(subMap.size());
+            int purged = 0;
+            boolean hitLimit = false;
+            for (Iterator<Map.Entry<BlockPos, ComponentEntry>> it = subMap.entrySet().iterator();
+                    it.hasNext();) {
+                Map.Entry<BlockPos, ComponentEntry> e = it.next();
+                ComponentEntry entry = e.getValue();
+                BlockEntity be = entry.blockEntity();
+                if (!hitLimit && (be == null || be.isRemoved())) {
+                    unregister(e.getKey());
+                    purged++;
+                    if (purged >= MAX_PURGE_PER_QUERY) {
+                        hitLimit = true; // 达到限额，后续条目不再检查
+                    }
+                    continue;
+                }
+                result.add(entry);
+            }
+            return Collections.unmodifiableList(result);
         }
 
         Map<ComponentRole, Set<BlockPos>> roleMap = BY_ROLE.get(subUUID);
@@ -226,6 +317,13 @@ public final class ComponentRegistry {
 
         Set<BlockPos> positions = roleMap.get(role);
         if (positions == null || positions.isEmpty()) {
+            return List.of();
+        }
+
+        // 惰性清理：检查并移除过期条目的位置
+        positions = purgeStaleEntries(subUUID, positions);
+        if (positions.isEmpty()) {
+            roleMap.remove(role);
             return List.of();
         }
 

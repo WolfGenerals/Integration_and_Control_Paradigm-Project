@@ -3,6 +3,7 @@ package com.hainabaichuan75.iac_p;
 import com.hainabaichuan75.iac_p.affiliation.AffiliationCommand;
 import com.hainabaichuan75.iac_p.affiliation.WorldLoadHandler;
 import com.hainabaichuan75.iac_p.events.MountedProtectionHandler;
+import com.hainabaichuan75.iac_p.events.PartDamageCache;
 import com.hainabaichuan75.iac_p.events.PlayerMountTracker;
 import com.hainabaichuan75.iac_p.events.SubLevelProjectileHandler;
 import com.hainabaichuan75.iac_p.index.ModBlockEntityTypes;
@@ -48,6 +49,8 @@ public class IACP {
         NeoForge.EVENT_BUS.register(MountedProtectionHandler.class);
         // 部件损坏系统：外部弹射物命中 SubLevel 方块
         NeoForge.EVENT_BUS.register(SubLevelProjectileHandler.class);
+        // 部件损坏缓存 + 裂纹同步 + chunk 加载重发
+        NeoForge.EVENT_BUS.register(PartDamageCache.class);
 
         // 归属系统调试命令
         NeoForge.EVENT_BUS.register(AffiliationCommand.class);
