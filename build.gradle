@@ -120,21 +120,36 @@ dependencies {
     def extractJarjars = tasks.register("extractJarjars") {
         outputs.dir(layout.buildDirectory.dir("jarjar-deps"))
         doLast {
-            def outputDir = outputs.files.singleFile
-            delete(outputDir)
-            outputDir.mkdirs()
+            def outputDir = outputs.files.singleFile.toPath()
+            if (java.nio.file.Files.exists(outputDir)) {
+                java.nio.file.Files.walk(outputDir).sorted(java.util.Comparator.reverseOrder())
+                    .forEach { java.nio.file.Files.deleteIfExists(it) }
+            }
+            java.nio.file.Files.createDirectories(outputDir)
             def home = System.getProperty("user.home")
-            ["sable", "create-aeronautics", "create"].each { mod ->
-                def base = new File("${home}/.gradle/caches/modules-2/files-2.1/maven.modrinth/${mod}")
-                if (!base.exists()) return
-                base.eachFileRecurse { f ->
-                    if (f.name.endsWith(".jar")) {
-                        zipTree(f).matching {
-                            include "META-INF/jarjar/*.jar"
-                        }.each { nestedJar ->
-                            copy { from zipTree(nestedJar); into outputDir }
+            def cacheDir = new File("${home}/.gradle/caches/modules-2/files-2.1/maven.modrinth")
+            if (!cacheDir.exists()) return
+            cacheDir.eachFileRecurse { f ->
+                if (f.name.endsWith(".jar")) {
+                    def zf = new java.util.zip.ZipFile(f)
+                    try {
+                        def jarjarEntries = zf.entries().findAll { it.name.startsWith("META-INF/jarjar/") && it.name.endsWith(".jar") }
+                        jarjarEntries.each { entry ->
+                            def bytes = zf.getInputStream(entry).bytes
+                            def nestedZis = new java.util.zip.ZipInputStream(new java.io.ByteArrayInputStream(bytes))
+                            try {
+                                def nestedEntry = nestedZis.nextEntry
+                                while (nestedEntry != null) {
+                                    if (!nestedEntry.isDirectory()) {
+                                        def target = outputDir.resolve(nestedEntry.name)
+                                        java.nio.file.Files.createDirectories(target.parent)
+                                        java.nio.file.Files.copy(nestedZis, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                                    }
+                                    nestedEntry = nestedZis.nextEntry
+                                }
+                            } finally { nestedZis.close() }
                         }
-                    }
+                    } finally { zf.close() }
                 }
             }
         }
