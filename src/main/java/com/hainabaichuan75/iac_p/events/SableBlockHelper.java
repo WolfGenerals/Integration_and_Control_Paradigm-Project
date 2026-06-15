@@ -68,10 +68,12 @@ public final class SableBlockHelper {
      * @param level 世界
      * @param hitPos 命中位置（物理世界浮点坐标）
      * @param outPos 输出：SubLevel 局部空间中的 BlockPos（即 plot chunk 坐标）
+     * @param dir 射线方向（单位向量），用于命中点为空气时的微调修正。可为 null 表示不做微调。
      * @return 非 null 表示找到了 SubLevel，outPos 为 SubLevel 局部坐标
      */
     @Nullable
-    public static SubLevelAccess findSubLevelAt(Level level, Vec3 hitPos, BlockPos.MutableBlockPos outPos) {
+    public static SubLevelAccess findSubLevelAt(Level level, Vec3 hitPos,
+            BlockPos.MutableBlockPos outPos, @Nullable Vec3 dir) {
         BlockPos hitBP = BlockPos.containing(hitPos);
 
         // ================================================================
@@ -116,8 +118,15 @@ public final class SableBlockHelper {
             BlockPos localBP = BlockPos.containing(localPos);
 
             // 4. 验证该局部坐标处有实际方块（非空气）
-            BlockState state = level.getBlockState(localBP);
-            if (state.isAir()) {
+            //    如果精确位置为 air，沿射线方向微调 +0.01 后重试一次。
+            //    这是因为射线命中在方块表面时因浮点精度可能取到空气面。
+            //    不尝试相邻方块，避免"伤害扩散"到已摧毁的方块旁边。
+            if (level.getBlockState(localBP).isAir() && dir != null) {
+                Vec3 nudgedHitPos = hitPos.add(dir.scale(0.01));
+                localPos = pose.transformPositionInverse(nudgedHitPos);
+                localBP = BlockPos.containing(localPos);
+            }
+            if (level.getBlockState(localBP).isAir()) {
                 continue;
             }
 
@@ -161,6 +170,14 @@ public final class SableBlockHelper {
      */
     public static Vec3 subLevelToWorldSpace(Pose3dc pose, Vec3 localPos) {
         return pose.transformPosition(localPos);
+    }
+
+    /**
+     * 向后兼容版本（不带方向参数）。 当没有射线方向信息时，精确位置为 air 直接返回 null。
+     */
+    @Nullable
+    public static SubLevelAccess findSubLevelAt(Level level, Vec3 hitPos, BlockPos.MutableBlockPos outPos) {
+        return findSubLevelAt(level, hitPos, outPos, null);
     }
 
     /**

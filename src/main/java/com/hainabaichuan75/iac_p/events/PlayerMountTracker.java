@@ -19,6 +19,7 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.event.entity.EntityJoinLevelEvent;
+import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerInteractEvent;
 import net.neoforged.neoforge.event.server.ServerStartingEvent;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
@@ -88,6 +89,20 @@ public class PlayerMountTracker {
         return MOUNTED.get(player.getUUID());
     }
 
+    // ====== 世界加载时清理（由 WorldLoadHandler 触发） ======
+    /**
+     * 清空所有骑乘状态，防止跨存档残留。
+     */
+    public static void onWorldLoad() {
+        if (!MOUNTED.isEmpty()) {
+            IACP.LOGGER.info("[PlayerMountTracker] 世界加载，清理 {} 条骑乘状态", MOUNTED.size());
+            MOUNTED.clear();
+        }
+        if (!SUBLEVEL_OCCUPANTS.isEmpty()) {
+            SUBLEVEL_OCCUPANTS.clear();
+        }
+    }
+
     private static final String MOUNTED_NBT_KEY = IACP.MODID + ".mounted";
 
     public static void mount(ServerPlayer player, UUID subLevelUUID,
@@ -145,7 +160,7 @@ public class PlayerMountTracker {
             // 目标 2：清除 SubLevel 占用
             SUBLEVEL_OCCUPANTS.remove(data.subLevelUUID());
             // 部件损坏：清理该 SubLevel 的耐久缓存
-            PartDamageCache.clear(data.subLevelUUID());
+            PartDamageCache.clear(data.subLevelUUID(), player.serverLevel());
             IACP.LOGGER.info("[ServerMount] 已清除 SubLevel {} 的占用与部件缓存", data.subLevelUUID());
         } else {
             IACP.LOGGER.warn("[ServerMount] unmount() 时 MOUNTED 表中无此玩家数据");
@@ -306,6 +321,10 @@ public class PlayerMountTracker {
                 AffiliationHelper.unregisterVehicleBody(data.subLevelUUID(), playerUUID);
                 ServerMountHandler.resetSuspensionInputsByUUID(server, data.subLevelUUID());
                 SUBLEVEL_OCCUPANTS.remove(data.subLevelUUID());
+                // 注意：player == null 时无法清理玩家的 NBT 标记，
+                // 但 onEntityJoinLevel() 中的 hasStaleMountTag 检查会处理残留标记
+                ServerLevel anyLevel = server.getLevel(ServerLevel.OVERWORLD);
+                PartDamageCache.clear(data.subLevelUUID(), anyLevel);
                 it.remove();
                 continue;
             }
@@ -316,6 +335,7 @@ public class PlayerMountTracker {
                 AffiliationHelper.unregisterVehicleBody(data.subLevelUUID(), player.getUUID());
                 ServerMountHandler.resetSuspensionInputsByUUID(server, data.subLevelUUID());
                 SUBLEVEL_OCCUPANTS.remove(data.subLevelUUID());
+                PartDamageCache.clear(data.subLevelUUID(), player.serverLevel());
                 it.remove();
                 forceDismountClient(server, player);
                 continue;
@@ -327,6 +347,7 @@ public class PlayerMountTracker {
                 IACP.LOGGER.warn("[ServerMount] 玩家 {}: SubLevelContainer 不可达", player.getName().getString());
                 ServerMountHandler.resetSuspensionInputsByUUID(server, data.subLevelUUID());
                 SUBLEVEL_OCCUPANTS.remove(data.subLevelUUID());
+                PartDamageCache.clear(data.subLevelUUID(), player.serverLevel());
                 it.remove();
                 forceDismountClient(server, player);
                 continue;
@@ -338,6 +359,7 @@ public class PlayerMountTracker {
                         player.getName().getString(), data.subLevelUUID);
                 AffiliationHelper.unregisterVehicleBody(data.subLevelUUID(), player.getUUID());
                 SUBLEVEL_OCCUPANTS.remove(data.subLevelUUID());
+                PartDamageCache.clear(data.subLevelUUID(), player.serverLevel());
                 it.remove();
                 forceDismountClient(server, player);
                 continue;
@@ -507,6 +529,63 @@ public class PlayerMountTracker {
             restorePlayer(player);
             ModNetworking.sendToPlayer(player, new MountedStateS2CPacket(false, new UUID(0, 0), 0.0, 0, 0, 0));
         }
+    }
+
+    // ====== 玩家登出：强制下车 + 清理 NBT ======
+    @SubscribeEvent
+    public static void onPlayerLoggedOut(PlayerEvent.PlayerLoggedOutEvent event) {
+        if (!(event.getEntity() instanceof ServerPlayer player)) {
+            return;
+        }
+        MountData data = MOUNTED.get(player.getUUID());
+        if (data == null) {
+            // 可能残留 NBT 标记，一并清理
+            if (hasStaleMountTag(player)) {
+                player.getPersistentData().remove(MOUNTED_NBT_KEY);
+            }
+            return;
+        }
+        IACP.LOGGER.info("[ServerMount] 玩家 {} 登出，强制下车", player.getName().getString());
+        // 先重置悬挂输入（保留手刹），再清理状态
+        MinecraftServer server = player.getServer();
+        if (server != null) {
+            ServerMountHandler.resetSuspensionInputsByUUID(server, data.subLevelUUID());
+        }
+        forceDismountServer(player);
+    }
+
+    /**
+     * 强制玩家下车（服务端状态清理 + NBT + 通知客户端 + 恢复状态）。
+     * <p>
+     * 与 {@link #forceDismountClient} 的区别：此方法也恢复玩家移动能力。
+     * 用于登出/维度切换等无法通过正常下车流程处理的场景。
+     */
+    private static void forceDismountServer(ServerPlayer player) {
+        MountData data = MOUNTED.get(player.getUUID());
+        if (data != null) {
+            AffiliationHelper.unregisterVehicleBody(data.subLevelUUID(), player.getUUID());
+            SUBLEVEL_OCCUPANTS.remove(data.subLevelUUID());
+        }
+        unmount(player);
+        restorePlayer(player);
+        ModNetworking.sendToPlayer(player, new MountedStateS2CPacket(false, new UUID(0, 0), 0.0, 0, 0, 0));
+    }
+
+    // ====== 维度切换：强制下车 ======
+    @SubscribeEvent
+    public static void onPlayerChangedDimension(PlayerEvent.PlayerChangedDimensionEvent event) {
+        if (!(event.getEntity() instanceof ServerPlayer player) || !isMounted(player)) {
+            return;
+        }
+        IACP.LOGGER.info("[ServerMount] 玩家 {} 切换维度，强制下车", player.getName().getString());
+        MountData data = MOUNTED.get(player.getUUID());
+        if (data != null) {
+            MinecraftServer server = player.getServer();
+            if (server != null) {
+                ServerMountHandler.resetSuspensionInputsByUUID(server, data.subLevelUUID());
+            }
+        }
+        forceDismountServer(player);
     }
 
     // ====== 骑乘时禁止交互（服务端强制） ======

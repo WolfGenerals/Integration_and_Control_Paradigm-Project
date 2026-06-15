@@ -191,6 +191,18 @@ public class TurretBaseBlockEntity extends KineticBlockEntity implements com.hai
      */
     private int deferredRebuildTicks = -1;
 
+    /**
+     * 约束重建已连续失败的次数。成功重建时重置为 0。
+     */
+    private int rebuildRetryCount = 0;
+
+    /**
+     * 约束重建最大重试次数。超过此值后自动拆卸炮塔，防止无限重试。
+     * <p>
+     * 假设每次重试间隔 2 秒，10 次 ≈ 20 秒。 如果 20 秒后仍无法重建，说明 SubLevel 数据可能已损坏，自动拆卸比无限等待更合理。
+     */
+    private static final int MAX_REBUILD_RETRIES = 10;
+
     // ====== 约束锚点偏移常量（可在此调整炮塔铰链位置） ======
     private static final double ANCHOR_ROD_X = 0.0;       // 避雷针端 X（炮管约束点）
     private static final double ANCHOR_ROD_Y = 0.0;       // 避雷针端 Y（0=中心）
@@ -281,6 +293,7 @@ public class TurretBaseBlockEntity extends KineticBlockEntity implements com.hai
 
     @Override
     public void onChunkUnloaded() {
+        cleanupStaticMaps();
         com.hainabaichuan75.iac_p.affiliation.ComponentHost.unregisterComponent(this);
         super.onChunkUnloaded();
     }
@@ -346,18 +359,31 @@ public class TurretBaseBlockEntity extends KineticBlockEntity implements com.hai
         // 在 read() 或 onLoad() 中设置，经过若干 tick 后执行，
         // 确保 SubLevel 容器和 SubLevel 已完全加载。
         // 持续重试直到所有约束句柄都有效，或达到最大重试次数。
+        // 如果达到上限仍未成功，自动拆卸炮塔并输出错误日志。
         if (deferredRebuildTicks > 0) {
             deferredRebuildTicks--;
             if (deferredRebuildTicks == 0) {
-                IACP.LOGGER.info("[TurretBase] 延迟 tick 触发约束重建 @ {}", this.worldPosition);
+                IACP.LOGGER.info("[TurretBase] 延迟 tick 触发约束重建 (第 {} 次) @ {}",
+                        rebuildRetryCount + 1, this.worldPosition);
                 reestablishConstraints();
                 // 检查重建是否完全成功：如果方向机或高低机句柄仍无效，继续重试
                 boolean yawOk = swivelBearingHandle != null && swivelBearingHandle.isValid();
                 boolean pitchOk = barrelPitchHandle != null && barrelPitchHandle.isValid();
                 if (!yawOk || !pitchOk) {
-                    deferredRebuildTicks = 40; // 2 秒后再次重试
-                    IACP.LOGGER.info("[TurretBase] 约束重建未完全成功 (方向机={}, 高低机={})，2 秒后重试 @ {}",
-                            yawOk, pitchOk, this.worldPosition);
+                    rebuildRetryCount++;
+                    if (rebuildRetryCount >= MAX_REBUILD_RETRIES) {
+                        IACP.LOGGER.error("[TurretBase] 约束重建重试 {} 次仍失败，自动拆卸 @ {}",
+                                MAX_REBUILD_RETRIES, this.worldPosition);
+                        // 自动拆卸：让玩家可以重新放置炮塔来修复
+                        disassemble();
+                        rebuildRetryCount = 0;
+                    } else {
+                        deferredRebuildTicks = 40; // 2 秒后再次重试
+                        IACP.LOGGER.warn("[TurretBase] 约束重建未完全成功 (方向机={}, 高低机={})，{}/{} 次后重试 @ {}",
+                                yawOk, pitchOk, rebuildRetryCount, MAX_REBUILD_RETRIES, this.worldPosition);
+                    }
+                } else {
+                    rebuildRetryCount = 0; // 成功，重置计数
                 }
             }
         }
@@ -814,6 +840,23 @@ public class TurretBaseBlockEntity extends KineticBlockEntity implements com.hai
     /**
      * 拆卸：移除所有 SubLevel（砂轮 + 避雷针）。
      */
+    /**
+     * 清理所有与当前炮塔相关的静态映射条目。
+     * <p>
+     * 在 {@link #disassemble()} 和 {@link #setRemoved()} 中调用， 防止 static Map
+     * 无限增长导致内存泄漏。
+     */
+    private void cleanupStaticMaps() {
+        if (this.grindstoneSubLevelId != null) {
+            GRINDSTONE_OWNER_MAP.remove(this.grindstoneSubLevelId);
+            GRINDSTONE_ANCHOR_MAP.remove(this.grindstoneSubLevelId);
+            GRINDSTONE_LINE_CACHE.remove(this.grindstoneSubLevelId);
+        }
+        if (this.lightningRodSubLevelId != null) {
+            ROD_OWNER_MAP.remove(this.lightningRodSubLevelId);
+        }
+    }
+
     public void disassemble() {
         if (!this.assembled || this.level == null || this.level.isClientSide) {
             return;
@@ -841,20 +884,14 @@ public class TurretBaseBlockEntity extends KineticBlockEntity implements com.hai
                 this.groupId = null;
             }
 
+            // 清理静态映射（合并到 cleanupStaticMaps）
+            cleanupStaticMaps();
+
             // 移除砂轮
-            // 从静态注册表中移除
-            if (this.grindstoneSubLevelId != null) {
-                GRINDSTONE_OWNER_MAP.remove(this.grindstoneSubLevelId);
-                GRINDSTONE_ANCHOR_MAP.remove(this.grindstoneSubLevelId);
-                GRINDSTONE_LINE_CACHE.remove(this.grindstoneSubLevelId);
-            }
             removeSubLevelById(container, this.grindstoneSubLevelId);
             this.grindstoneSubLevelId = null;
 
             // 移除避雷针
-            if (this.lightningRodSubLevelId != null) {
-                ROD_OWNER_MAP.remove(this.lightningRodSubLevelId);
-            }
             removeSubLevelById(container, this.lightningRodSubLevelId);
             this.lightningRodSubLevelId = null;
         } catch (Exception e) {

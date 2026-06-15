@@ -4,23 +4,18 @@ import com.hainabaichuan75.iac_p.IACP;
 import com.hainabaichuan75.iac_p.client.WeaponOverlay;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
-import dev.ryanhcode.sable.api.sublevel.SubLevelContainer;
-import dev.ryanhcode.sable.sublevel.ClientSubLevel;
-import dev.ryanhcode.sable.sublevel.SubLevel;
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.world.phys.Vec3;
-
-import java.util.List;
-import java.util.UUID;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 import org.joml.Matrix4f;
-import org.joml.Vector3d;
+
+import java.util.List;
 
 /**
  * BulletTrailRenderer —— 渲染开火弹道（白色线条）。
@@ -33,8 +28,8 @@ import org.joml.Vector3d;
  * <li>刷新：{@link MultiBufferSource.BufferSource#endLastBatch()}</li>
  * </ul>
  * <p>
- * 起点从 {@link WeaponOverlay.TurretFireInstance#subLevelId} 对应的避雷针 SubLevel 每帧通过
- * {@code renderPose(partialTick)} 重新计算，确保线条始终连接炮口当前位置，消除因炮塔旋转/相机移动导致的抖动。
+ * 起点使用 {@link WeaponOverlay.TurretFireInstance#origin}（开火时固定的世界坐标），
+ * 不跟随炮口移动，消除动态炮口位置带来的弹道抖动。
  */
 @EventBusSubscriber(value = Dist.CLIENT, modid = IACP.MODID)
 public class BulletTrailRenderer {
@@ -55,12 +50,6 @@ public class BulletTrailRenderer {
             return;
         }
 
-        float partialTick = mc.getTimer().getGameTimeDeltaPartialTick(false);
-        SubLevelContainer container = SubLevelContainer.getContainer(mc.level);
-        if (container == null) {
-            return;
-        }
-
         Camera camera = event.getCamera();
         Matrix4f modelView = event.getModelViewMatrix();
         double cx = camera.getPosition().x;
@@ -75,14 +64,14 @@ public class BulletTrailRenderer {
         VertexConsumer consumer = bufferSource.getBuffer(RenderType.LINES);
 
         for (WeaponOverlay.TurretFireInstance fi : fires) {
-            // 每帧从避雷针 SubLevel 的 renderPose 重新计算炮口世界坐标，再转为摄像机相对坐标
-            Vec3 dynamicOrigin = computeMuzzlePosition(container, fi.subLevelId, partialTick);
-            if (dynamicOrigin == null) {
+            // 直接使用开火时固定的起点，不动态计算
+            Vec3 origin = fi.origin;
+            if (origin == null) {
                 drawPoint(consumer, matrix, fi.hitPos, cx, cy, cz);
                 continue;
             }
             drawLine(consumer, matrix,
-                    dynamicOrigin.x - cx, dynamicOrigin.y - cy, dynamicOrigin.z - cz,
+                    origin.x - cx, origin.y - cy, origin.z - cz,
                     fi.hitPos.x - cx, fi.hitPos.y - cy, fi.hitPos.z - cz,
                     1f, 1f, 1f, 0.9f);
         }
@@ -91,46 +80,7 @@ public class BulletTrailRenderer {
     }
 
     /**
-     * 计算避雷针 SubLevel 在当前帧的炮口世界坐标。 逻辑与 {@code WeaponOverlay.fireSingleTurret()}
-     * 中的炮口计算一致。
-     */
-    @javax.annotation.Nullable
-    private static Vec3 computeMuzzlePosition(SubLevelContainer container, UUID subLevelId, float partialTick) {
-        if (subLevelId == null) {
-            return null;
-        }
-        SubLevel sl = container.getSubLevel(subLevelId);
-        if (!(sl instanceof ClientSubLevel csl) || csl.isRemoved()) {
-            return null;
-        }
-
-        var rodPlot = csl.getPlot();
-        if (rodPlot == null) {
-            return null;
-        }
-
-        var pose = csl.renderPose(partialTick);
-        if (pose == null) {
-            return null;
-        }
-
-        // 方块中心在 plot 局部空间 → 变换到主世界
-        var localBP = rodPlot.getCenterBlock();
-        var localCenter = new Vector3d(localBP.getX() + 0.5, localBP.getY() + 0.5, localBP.getZ() + 0.5);
-        var worldCenter = pose.transformPosition(localCenter);
-
-        // 炮管朝向（Z 轴正向）
-        Vector3d fwd = new Vector3d(0, 0, 1);
-        fwd.rotate(pose.orientation());
-
-        return new Vec3(
-                worldCenter.x + fwd.x * 0.5,
-                worldCenter.y + fwd.y * 0.5,
-                worldCenter.z + fwd.z * 0.5);
-    }
-
-    /**
-     * 在命中点画一个点（降级：找不到炮口位置时使用）。
+     * 在命中点画一个点（降级：找不到起点时使用）。
      */
     private static void drawPoint(VertexConsumer consumer, Matrix4f matrix,
             Vec3 hitPos, double cx, double cy, double cz) {
