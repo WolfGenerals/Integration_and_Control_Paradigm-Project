@@ -35,6 +35,11 @@ repositories {
         name = "CurseMaven"
         url = "https://www.cursemaven.com"
     }
+    // BlameJared Maven（Veil 渲染引擎）
+    maven {
+        name = "BlameJared"
+        url = "https://maven.blamejared.com"
+    }
     // FlatDir 仍保留 libs/ 作为备选方案，优先从远程仓库获取
     flatDir {
         dirs 'libs'
@@ -113,6 +118,13 @@ dependencies {
     implementation "maven.modrinth:create:6.0.10+mc1.21.1"
     implementation "maven.modrinth:create-aeronautics:1.2.1+mc1.21.1"
     implementation "maven.modrinth:sable:1.2.2+mc1.21.1"
+
+    // Veil 渲染引擎（编译期依赖，运行时由 create-aeronautics-bundled 提供）
+    // 排除 modrinth 和 fallenbreath 避免版本冲突
+    compileOnly("foundry.veil:veil-neoforge-${minecraft_version}:4.1.4") {
+        exclude group: "maven.modrinth"
+        exclude group: "me.fallenbreath"
+    }
 
     // 所有前置模组使用 JarJar 将依赖嵌套在 JAR 内（运行时 NeoForge 处理）。
     // compileClasspath 不含这些嵌套，导致 "程序包不存在"。

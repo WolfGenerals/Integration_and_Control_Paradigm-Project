@@ -71,11 +71,13 @@ public class CameraMixin {
             BoundingBox3dc bbox = clientSubLevel.boundingBox();
 
             // === 自适应摄像机高度 ===
-            // 开启后：焦点高度 = maxY + 1 + 手动偏移，确保镜头始终比载具最高点高出 1 格
-            // 关闭后：焦点高度 = renderPos.y + 手动偏移（原版行为）
+            // 焦点 Y 始终使用 renderPose.position().y()（插值平滑），
+            // 不再使用 bbox.maxY()（物理引擎 AABB，非插值会导致垂直抖动）。
+            // 自适应模式下额外加上载具半高偏移，使镜头位于载具中部偏上。
             double focusY;
             if (Config.CAMERA_ADAPTIVE_HEIGHT.get()) {
-                focusY = bbox.maxY() + 1.0 + Config.CAMERA_HEIGHT_OFFSET.get();
+                double halfHeight = (bbox.maxY() - bbox.minY()) * 0.5;
+                focusY = renderPos.y() + halfHeight + 1.0 + Config.CAMERA_HEIGHT_OFFSET.get();
             } else {
                 focusY = renderPos.y() + Config.CAMERA_HEIGHT_OFFSET.get();
             }
