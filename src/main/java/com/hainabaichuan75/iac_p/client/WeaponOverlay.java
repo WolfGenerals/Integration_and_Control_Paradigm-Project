@@ -5,6 +5,7 @@ import com.hainabaichuan75.iac_p.affiliation.ComponentEntry;
 import com.hainabaichuan75.iac_p.affiliation.ComponentRegistry;
 import com.hainabaichuan75.iac_p.affiliation.ComponentRole;
 import com.hainabaichuan75.iac_p.content.blocks.turret.TurretBaseBlockEntity;
+import dev.ryanhcode.sable.Sable;
 import dev.ryanhcode.sable.api.sublevel.SubLevelContainer;
 import dev.ryanhcode.sable.companion.math.BoundingBox3dc;
 import dev.ryanhcode.sable.companion.math.BoundingBox3ic;
@@ -32,6 +33,7 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.RenderGuiEvent;
 import org.joml.Vector3d;
 
+import javax.annotation.Nullable;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -58,10 +60,6 @@ public class WeaponOverlay {
      * 射线最大检测距离（格）
      */
     public static final double MAX_RAY_DISTANCE = 1000.0;
-    /**
-     * 最小检测距离（格），低于此距离的命中视为载具自身，忽略
-     */
-    private static final double MIN_RAY_DISTANCE = 2.0;
 
     /**
      * 准星偏向最大锥角（度）。弹道在此锥角内被拉向玩家准星瞄准点， 用于掩饰炮塔旋转延迟带来的命中偏差。
@@ -86,15 +84,24 @@ public class WeaponOverlay {
     // ==================================================================
     /**
      * 单次开火弹道数据。
+     * <p>
+     * 渲染时 origin 由 {@link BulletTrailRenderer} 每帧从 subLevelId 的当前
+     * {@code renderPose} 重新计算（不缓存固定值），确保线条始终连接炮口。
      */
     public static class TurretFireInstance {
 
-        public final Vec3 origin;
+        /**
+         * 避雷针（炮管）SubLevel UUID，用于每帧重新计算动态炮口位置
+         */
+        public final UUID subLevelId;
+        /**
+         * 命中点世界坐标（固定不变）
+         */
         public final Vec3 hitPos;
         public int ticks;
 
-        TurretFireInstance(Vec3 origin, Vec3 hitPos) {
-            this.origin = origin;
+        TurretFireInstance(UUID subLevelId, Vec3 hitPos) {
+            this.subLevelId = subLevelId;
             this.hitPos = hitPos;
             this.ticks = 2;
         }
@@ -216,13 +223,61 @@ public class WeaponOverlay {
             return;
         }
 
-        // 炮口位置 + 炮管朝向（Z 轴正向旋转到世界空间）
+        // 炮口位置：从 SubLevel 内部 plot chunk 坐标（大数）显式转换到主世界坐标
+        // 首先获取避雷针方块在 plot chunk 中的局部坐标
+        var rodPlot = csl.getPlot();
+        if (rodPlot == null) {
+            return;
+        }
+        BlockPos localBP = rodPlot.getCenterBlock();
+        // 方块中心在 plot 局部空间
+        var localCenter = new Vector3d(localBP.getX() + 0.5, localBP.getY() + 0.5, localBP.getZ() + 0.5);
+        // 通过 SubLevel 位姿变换到主世界空间
+        var worldCenter = pose.transformPosition(localCenter);
+
+        // 炮管朝向（Z 轴正向旋转到世界空间）
         Vector3d fwd = new Vector3d(0, 0, 1);
         fwd.rotate(pose.orientation());
+        // 炮口原点 = 方块中心世界坐标 + 半格炮管方向偏移
         Vec3 origin = new Vec3(
-                pose.position().x() + fwd.x * 0.5,
-                pose.position().y() + fwd.y * 0.5,
-                pose.position().z() + fwd.z * 0.5);
+                worldCenter.x + fwd.x * 0.5,
+                worldCenter.y + fwd.y * 0.5,
+                worldCenter.z + fwd.z * 0.5);
+
+        // ---- 渲染用原点（不含速度偏移，保持平滑） ----
+        Vec3 renderOrigin = origin;
+
+        // ---- 服务端用原点（含速度偏移，提高命中准确性） ----
+        // 查询砂轮（方向机）瞬时速度，乘以系数作为位移偏移。
+        // 此偏移仅用于发往服务端的包，不影响客户端弹道渲染（避免高速下弹道抖动）。
+        UUID gsId = tb.getGrindstoneSubLevelId();
+        if (gsId != null) {
+            SubLevel gsSL = container.getSubLevel(gsId);
+            if (gsSL instanceof ClientSubLevel gsCsl && !gsCsl.isRemoved()) {
+                LevelPlot gsPlot = gsCsl.getPlot();
+                if (gsPlot != null) {
+                    BlockPos gsLocalBP = gsPlot.getCenterBlock();
+                    var gsLocalCenter = new org.joml.Vector3d(
+                            gsLocalBP.getX() + 0.5, gsLocalBP.getY() + 0.5, gsLocalBP.getZ() + 0.5);
+                    var gsLogicalPose = gsCsl.logicalPose();
+                    if (gsLogicalPose != null) {
+                        var gsWorldPos = gsLogicalPose.transformPosition(gsLocalCenter);
+                        var vel = Sable.HELPER.getVelocity(mc.level, gsWorldPos);
+                        if (vel != null && vel.length() > 0.01) {
+                            double timeScale = 0.5;
+                            origin = origin.add(new Vec3(
+                                    vel.x() * timeScale,
+                                    vel.y() * timeScale,
+                                    vel.z() * timeScale));
+                        }
+                    }
+                }
+            }
+        }
+        // 此时 origin 已含速度偏移（用于服务端），renderOrigin 不含（用于客户端渲染）
+
+        // 直接使用 renderPose(partialTick) 计算精确炮口位置作为发射原点。
+        // 帧间插值确保客户端当前帧炮口位置与视觉一致。
         Vec3 dir = new Vec3(fwd.x, fwd.y, fwd.z);
 
         //如果想增大角度，可以调整 AIM_BIAS_MAX_DEG 的值
@@ -232,12 +287,11 @@ public class WeaponOverlay {
 
         // 从炮口沿（可能经过偏修正的）方向做射线检测
         // 射线穿透所有 SubLevel 物理外壳，只停在方块/实体碰撞箱上。
-        // 实际武器伤害服务端会使用 SableBlockHelper + AffiliationRegistry 重新验证，
-        // 客户端结果仅用于弹道渲染视觉和初始瞄准坐标。
         Vec3 hitPos = raycastGeneric(mc, origin, dir, MAX_RAY_DISTANCE);
 
-        // 存储弹道数据 + 发送伤害数据包
-        activeFires.add(new TurretFireInstance(origin, hitPos));
+        // 渲染用 subLevelId（每帧从 renderPose 动态计算炮口位置） + 命中点
+        activeFires.add(new TurretFireInstance(rodId, hitPos));
+        // 服务端用 origin（含速度偏移） + 命中点 → 伤害判定
         ModNetworking.sendToServer(new WeaponFireC2SPacket(origin.x, origin.y, origin.z, hitPos.x, hitPos.y, hitPos.z));
     }
 
@@ -349,7 +403,7 @@ public class WeaponOverlay {
         }
         if (blockHit.getType() != HitResult.Type.MISS) {
             double distSq = blockHit.getLocation().distanceToSqr(origin);
-            if (distSq < closestDistSq && distSq > MIN_RAY_DISTANCE * MIN_RAY_DISTANCE) {
+            if (distSq < closestDistSq) {
                 closestDistSq = distSq;
                 closestHit = blockHit.getLocation();
                 hitType = "Block";
@@ -372,7 +426,7 @@ public class WeaponOverlay {
             var optHit = bb.clip(origin, to);
             Vec3 preciseHit = optHit.orElse(entityHit.getLocation());
             double distSq = preciseHit.distanceToSqr(origin);
-            if (distSq < closestDistSq && distSq > MIN_RAY_DISTANCE * MIN_RAY_DISTANCE) {
+            if (distSq < closestDistSq) {
                 closestDistSq = distSq;
                 closestHit = preciseHit;
                 hitType = "Entity (" + entityHit.getEntity().getType().getDescription().getString() + ")";
@@ -390,6 +444,22 @@ public class WeaponOverlay {
                     if (sl.isRemoved() || !(sl instanceof ClientSubLevel csl)) {
                         continue;
                     }
+
+                    // AABB 快速剔除：检查射线是否经过此 SubLevel 的物理世界 AABB
+                    var physBB = sl.boundingBox();
+                    if (physBB == null) {
+                        continue;
+                    }
+                    Vec3 bbHit = rayAABBIntersection(origin, dir,
+                            physBB.minX(), physBB.minY(), physBB.minZ(),
+                            physBB.maxX(), physBB.maxY(), physBB.maxZ());
+                    if (bbHit == null) {
+                        continue; // 射线不经过此 SubLevel
+                    }
+                    if (origin.distanceToSqr(bbHit) > maxDist * maxDist) {
+                        continue; // 交点在最大检测距离之外
+                    }
+
                     var pose = csl.logicalPose();
                     if (pose == null) {
                         continue;
@@ -413,7 +483,7 @@ public class WeaponOverlay {
                         // 将命中位置变换回主世界空间
                         Vec3 worldHitLoc = pose.transformPosition(localHit.getLocation());
                         double distSq = worldHitLoc.distanceToSqr(origin);
-                        if (distSq < closestDistSq && distSq > MIN_RAY_DISTANCE * MIN_RAY_DISTANCE) {
+                        if (distSq < closestDistSq) {
                             closestDistSq = distSq;
                             closestHit = worldHitLoc;
                             hitType = "SubLevelBlock";

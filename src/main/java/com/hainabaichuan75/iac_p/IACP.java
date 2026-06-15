@@ -1,6 +1,7 @@
 package com.hainabaichuan75.iac_p;
 
 import com.hainabaichuan75.iac_p.affiliation.AffiliationCommand;
+import com.hainabaichuan75.iac_p.affiliation.WorldLoadHandler;
 import com.hainabaichuan75.iac_p.events.MountedProtectionHandler;
 import com.hainabaichuan75.iac_p.events.PlayerMountTracker;
 import com.hainabaichuan75.iac_p.events.SubLevelProjectileHandler;
@@ -50,5 +51,8 @@ public class IACP {
 
         // 归属系统调试命令
         NeoForge.EVENT_BUS.register(AffiliationCommand.class);
+
+        // 世界加载时清空归属/部件注册表（维度切换/重载时防止数据残留）
+        NeoForge.EVENT_BUS.register(WorldLoadHandler.class);
     }
 }

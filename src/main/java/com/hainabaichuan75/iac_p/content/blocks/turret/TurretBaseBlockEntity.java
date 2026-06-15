@@ -6,7 +6,7 @@ import com.hainabaichuan75.iac_p.affiliation.AffiliationHelper;
 import com.hainabaichuan75.iac_p.affiliation.AffiliationRegistry;
 import com.hainabaichuan75.iac_p.affiliation.AffiliationRole;
 import com.hainabaichuan75.iac_p.affiliation.AffiliationTag;
-import com.hainabaichuan75.iac_p.events.SubLevelOwnership;
+
 import com.hainabaichuan75.iac_p.index.ModBlockEntityTypes;
 import com.simibubi.create.content.kinetics.base.KineticBlockEntity;
 import com.simibubi.create.foundation.blockEntity.behaviour.BlockEntityBehaviour;
@@ -647,10 +647,10 @@ public class TurretBaseBlockEntity extends KineticBlockEntity implements com.hai
             AffiliationHelper.registerTurretPart(
                     grindstoneSL.getUniqueId(), this.vehicleSubLevelId,
                     this.groupId, AffiliationRole.TURRET_YAW, AffiliationTag.FACTION_NEUTRAL);
-        } else {
-            // 主世界炮塔：注册到旧系统保持兼容
-            SubLevelOwnership.register(grindstoneSL.getUniqueId(), null);
         }
+        // 主世界炮塔（vehicleSubLevelId == null）：不注册归属。
+        // 主世界炮塔的开火被 WeaponFireC2SPacket.handle() 中的 isMounted 检查阻断，
+        // 不需要排除集保护。不生成无意义的 null 标签污染注册表。
 
         // ================================================================
         //  建立旋转轴承（RotaryConstraint）：将砂轮锚定到载具上
@@ -730,9 +730,9 @@ public class TurretBaseBlockEntity extends KineticBlockEntity implements com.hai
                     AffiliationHelper.registerTurretPart(
                             rodSL.getUniqueId(), this.vehicleSubLevelId,
                             this.groupId, AffiliationRole.TURRET_PITCH, AffiliationTag.FACTION_NEUTRAL);
-                } else {
-                    SubLevelOwnership.register(rodSL.getUniqueId(), this.vehicleSubLevelId);
                 }
+                // 主世界炮塔（vehicleSubLevelId == null）：不注册归属。
+                // 理由同上：主世界炮塔的开火被 mount 检查阻断，不需要排除集。
 
                 // ============================================================
                 //  与砂轮完全相同的约束坐标模式：getCenterBlock() + 0.5
@@ -1268,7 +1268,7 @@ public class TurretBaseBlockEntity extends KineticBlockEntity implements com.hai
         // ================================================================
         //  [断线重连修复] 服务端加载时重建约束 + 重新注册归属
         //  世界重载后，SubLevel 仍存在但约束句柄丢失；
-        //  归属记录（SubLevelOwnership）也在内存中丢失。
+        //  归属注册表（AffiliationRegistry）也在内存中丢失。
         //
         //  ⚠ 重要：不在此处直接调用 reestablishConstraints()，因为 read() 调用时
         //  SubLevel 容器可能尚未完全就绪（chunk 加载过程中）。

@@ -24,10 +24,12 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>
  * <b>索引结构</b>：
  * <pre>
- *   subLevelToTag:    SubLevel UUID → AffiliationTag（身份证）
- *   groupToMembers:   Group UUID → Set&lt;SubLevel UUID&gt;（组内成员）
- *   playerToVehicle:  玩家 UUID → 载具 SubLevel UUID
- *   vehicleToPlayer:  载具 SubLevel UUID → 玩家 UUID（反向，用于广播/判断）
+ *   subLevelToTag:          SubLevel UUID → AffiliationTag（身份证）
+ *   groupToMembers:         Group UUID → Set&lt;SubLevel UUID&gt;（组内成员）
+ *   playerToVehicle:        玩家 UUID → 载具 SubLevel UUID
+ *   vehicleToPlayer:        载具 SubLevel UUID → 玩家 UUID（反向，用于广播/判断）
+ *   vehicleToGroups:        载具 UUID → Set&lt;Group UUID&gt;（载具拥有的组）
+ *   vehicleToDirectMembers: 载具 UUID → Set&lt;SubLevel UUID&gt;（直接衍生结构，无组）
  * </pre>
  * <p>
  * <b>典型查询</b>：
@@ -67,6 +69,17 @@ public final class AffiliationRegistry {
      */
     private static final Map<UUID, Set<UUID>> VEHICLE_TO_GROUPS = new ConcurrentHashMap<>();
 
+    /**
+     * 载具 SubLevel UUID → Set<SubLevel UUID>（不属于任何组的直接衍生结构）。
+     * <p>
+     * 用于快速查找属于某载具但不属于任何逻辑组的散落 SubLevel（如主世界炮塔的部件）， 避免
+     * {@link #getOwnAffiliatedSet} 每次全表扫描 {@link #SUBLEVEL_TO_TAG}。
+     * <p>
+     * 组内成员通过 {@link #VEHICLE_TO_GROUPS} → {@link #GROUP_TO_MEMBERS} 索引， 不在此 Map
+     * 中重复存储。
+     */
+    private static final Map<UUID, Set<UUID>> VEHICLE_TO_DIRECT_MEMBERS = new ConcurrentHashMap<>();
+
     // ==================================================================
     //  性能监控
     // ==================================================================
@@ -76,6 +89,12 @@ public final class AffiliationRegistry {
      * 默认 100 微秒 (100_000 ns)。可通过调试命令临时调整。
      */
     private static long SLOW_QUERY_THRESHOLD_NS = 100_000;
+
+    /**
+     * 写操作锁对象。用于确保 register/unregister/clearAll 的原子性， 防止多线程下 unregister 和 put
+     * 之间的竞态条件。
+     */
+    private static final Object WRITE_LOCK = new Object();
 
     /**
      * 设置慢查询阈值（纳秒）。传入 0 或负值表示禁用慢查询日志。
@@ -111,20 +130,30 @@ public final class AffiliationRegistry {
             return;
         }
 
-        // 先注销旧的（如有），确保组索引一致
-        unregister(subLevelUUID);
+        synchronized (WRITE_LOCK) {
+            // 内联清理旧的索引条目（不调用 unregister，避免重复加锁和事件滥用）
+            AffiliationTag oldTag = SUBLEVEL_TO_TAG.remove(subLevelUUID);
+            if (oldTag != null) {
+                removeFromIndices(subLevelUUID, oldTag);
+            }
 
-        SUBLEVEL_TO_TAG.put(subLevelUUID, tag);
+            SUBLEVEL_TO_TAG.put(subLevelUUID, tag);
 
-        // 维护组索引
-        if (tag.groupId() != null) {
-            GROUP_TO_MEMBERS.computeIfAbsent(tag.groupId(), k -> ConcurrentHashMap.newKeySet())
-                    .add(subLevelUUID);
+            // 维护组索引和直接成员索引
+            if (tag.groupId() != null) {
+                GROUP_TO_MEMBERS.computeIfAbsent(tag.groupId(), k -> ConcurrentHashMap.newKeySet())
+                        .add(subLevelUUID);
 
-            // 维护载具→组索引
-            if (tag.vehicleId() != null) {
-                VEHICLE_TO_GROUPS.computeIfAbsent(tag.vehicleId(), k -> ConcurrentHashMap.newKeySet())
-                        .add(tag.groupId());
+                // 维护载具→组索引
+                if (tag.vehicleId() != null) {
+                    VEHICLE_TO_GROUPS.computeIfAbsent(tag.vehicleId(), k -> ConcurrentHashMap.newKeySet())
+                            .add(tag.groupId());
+                }
+            } else if (tag.vehicleId() != null && !subLevelUUID.equals(tag.vehicleId())) {
+                // 有 vehicleId 但无 groupId → 直接衍生结构，加入 VEHICLE_TO_DIRECT_MEMBERS
+                // 排除 vehicleUUID == subLevelUUID 的情况（载具主体自身）
+                VEHICLE_TO_DIRECT_MEMBERS.computeIfAbsent(tag.vehicleId(), k -> ConcurrentHashMap.newKeySet())
+                        .add(subLevelUUID);
             }
         }
 
@@ -132,7 +161,7 @@ public final class AffiliationRegistry {
                 subLevelUUID.toString().substring(0, 8),
                 tag.role(), tag.groupId() != null ? tag.groupId().toString().substring(0, 8) : "null");
 
-        // 抛出事件
+        // 抛出事件（在锁外抛出，避免死锁）
         NeoForge.EVENT_BUS.post(AffiliationChangeEvent.ofSubLevel(
                 AffiliationChangeEvent.ChangeType.REGISTER, subLevelUUID, tag));
     }
@@ -144,40 +173,59 @@ public final class AffiliationRegistry {
      *
      * @param subLevelUUID SubLevel 的 UUID
      */
-    public static void unregister(UUID subLevelUUID) {
-        if (subLevelUUID == null) {
-            return;
-        }
-
-        AffiliationTag oldTag = SUBLEVEL_TO_TAG.remove(subLevelUUID);
-        if (oldTag == null) {
-            return;
-        }
-
-        // 从组索引中移除
-        if (oldTag.groupId() != null) {
-            Set<UUID> members = GROUP_TO_MEMBERS.get(oldTag.groupId());
+    /**
+     * 从辅助索引中移除一个 SubLevel 的记录（不操作 SUBLEVEL_TO_TAG）。
+     * <p>
+     * 调用方必须持有 {@link #WRITE_LOCK}。
+     */
+    private static void removeFromIndices(UUID subLevelUUID, AffiliationTag tag) {
+        if (tag.groupId() != null) {
+            Set<UUID> members = GROUP_TO_MEMBERS.get(tag.groupId());
             if (members != null) {
                 members.remove(subLevelUUID);
                 if (members.isEmpty()) {
-                    GROUP_TO_MEMBERS.remove(oldTag.groupId());
+                    GROUP_TO_MEMBERS.remove(tag.groupId());
                     // 清理载具→组索引
-                    if (oldTag.vehicleId() != null) {
-                        Set<UUID> groups = VEHICLE_TO_GROUPS.get(oldTag.vehicleId());
+                    if (tag.vehicleId() != null) {
+                        Set<UUID> groups = VEHICLE_TO_GROUPS.get(tag.vehicleId());
                         if (groups != null) {
-                            groups.remove(oldTag.groupId());
+                            groups.remove(tag.groupId());
                             if (groups.isEmpty()) {
-                                VEHICLE_TO_GROUPS.remove(oldTag.vehicleId());
+                                VEHICLE_TO_GROUPS.remove(tag.vehicleId());
                             }
                         }
                     }
                 }
             }
+        } else if (tag.vehicleId() != null && !subLevelUUID.equals(tag.vehicleId())) {
+            // 从直接衍生索引中移除
+            Set<UUID> directMembers = VEHICLE_TO_DIRECT_MEMBERS.get(tag.vehicleId());
+            if (directMembers != null) {
+                directMembers.remove(subLevelUUID);
+                if (directMembers.isEmpty()) {
+                    VEHICLE_TO_DIRECT_MEMBERS.remove(tag.vehicleId());
+                }
+            }
+        }
+    }
+
+    public static void unregister(UUID subLevelUUID) {
+        if (subLevelUUID == null) {
+            return;
+        }
+
+        AffiliationTag oldTag;
+        synchronized (WRITE_LOCK) {
+            oldTag = SUBLEVEL_TO_TAG.remove(subLevelUUID);
+            if (oldTag == null) {
+                return;
+            }
+            removeFromIndices(subLevelUUID, oldTag);
         }
 
         IACP.LOGGER.debug("[AffiliationRegistry] 注销: {}", subLevelUUID.toString().substring(0, 8));
 
-        // 抛出事件
+        // 抛出事件（在锁外抛出，避免死锁）
         NeoForge.EVENT_BUS.post(AffiliationChangeEvent.ofSubLevel(
                 AffiliationChangeEvent.ChangeType.UNREGISTER, subLevelUUID, oldTag));
     }
@@ -194,28 +242,36 @@ public final class AffiliationRegistry {
             return;
         }
 
-        Set<UUID> members = GROUP_TO_MEMBERS.remove(groupId);
-        if (members != null) {
-            for (UUID memberUUID : members) {
-                SUBLEVEL_TO_TAG.remove(memberUUID);
+        Set<UUID> members;
+        synchronized (WRITE_LOCK) {
+            members = GROUP_TO_MEMBERS.remove(groupId);
+            if (members != null) {
+                for (UUID memberUUID : members) {
+                    SUBLEVEL_TO_TAG.remove(memberUUID);
+                    // 组内成员不可能在 VEHICLE_TO_DIRECT_MEMBERS 中（有 groupId），
+                    // 但清理 VEHICLE_TO_GROUPS 索引
+                }
             }
+
+            // 清理载具→组索引
+            for (Map.Entry<UUID, Set<UUID>> entry : VEHICLE_TO_GROUPS.entrySet()) {
+                Set<UUID> groups = entry.getValue();
+                if (groups != null) {
+                    groups.remove(groupId);
+                    if (groups.isEmpty()) {
+                        VEHICLE_TO_GROUPS.remove(entry.getKey());
+                    }
+                }
+            }
+        }
+
+        if (members != null) {
             IACP.LOGGER.info("[AffiliationRegistry] 整组注销: {}, 共 {} 个成员",
                     groupId.toString().substring(0, 8), members.size());
         }
 
-        // 抛出事件
+        // 抛出事件（在锁外）
         NeoForge.EVENT_BUS.post(AffiliationChangeEvent.ofGroup(groupId));
-
-        // 清理载具→组索引
-        for (Map.Entry<UUID, Set<UUID>> entry : VEHICLE_TO_GROUPS.entrySet()) {
-            Set<UUID> groups = entry.getValue();
-            if (groups != null) {
-                groups.remove(groupId);
-                if (groups.isEmpty()) {
-                    VEHICLE_TO_GROUPS.remove(entry.getKey());
-                }
-            }
-        }
     }
 
     // ==================================================================
@@ -321,7 +377,7 @@ public final class AffiliationRegistry {
         Set<UUID> result = new HashSet<>();
         result.add(vehicleUUID);
 
-        // 收集该载具的所有组内成员
+        // 收集该载具的所有组内成员（通过 VEHICLE_TO_GROUPS → GROUP_TO_MEMBERS 索引，O(1)）
         Set<UUID> groups = VEHICLE_TO_GROUPS.get(vehicleUUID);
         if (groups != null) {
             for (UUID groupId : groups) {
@@ -332,16 +388,11 @@ public final class AffiliationRegistry {
             }
         }
 
-        // 补充收集所有 vehicleId 指向此载具但不在任何组中的散落衍生结构
-        for (Map.Entry<UUID, AffiliationTag> entry : SUBLEVEL_TO_TAG.entrySet()) {
-            UUID slUUID = entry.getKey();
-            AffiliationTag tag = entry.getValue();
-            if (tag.vehicleId() != null
-                    && tag.vehicleId().equals(vehicleUUID)
-                    && tag.groupId() == null
-                    && !slUUID.equals(vehicleUUID)) {
-                result.add(slUUID);
-            }
+        // 收集不在任何组中的散落衍生结构（通过 VEHICLE_TO_DIRECT_MEMBERS 索引，O(1)）
+        // 不再全表扫描 SUBLEVEL_TO_TAG
+        Set<UUID> directMembers = VEHICLE_TO_DIRECT_MEMBERS.get(vehicleUUID);
+        if (directMembers != null) {
+            result.addAll(directMembers);
         }
 
         return Collections.unmodifiableSet(result);
@@ -361,19 +412,21 @@ public final class AffiliationRegistry {
             return;
         }
 
-        // 清除旧的绑定
-        UUID oldVehicle = PLAYER_TO_VEHICLE.remove(playerUUID);
-        if (oldVehicle != null) {
-            VEHICLE_TO_PLAYER.remove(oldVehicle);
+        synchronized (WRITE_LOCK) {
+            // 清除旧的绑定
+            UUID oldVehicle = PLAYER_TO_VEHICLE.remove(playerUUID);
+            if (oldVehicle != null) {
+                VEHICLE_TO_PLAYER.remove(oldVehicle);
+            }
+
+            // 设置新的绑定
+            if (vehicleUUID != null) {
+                PLAYER_TO_VEHICLE.put(playerUUID, vehicleUUID);
+                VEHICLE_TO_PLAYER.put(vehicleUUID, playerUUID);
+            }
         }
 
-        // 设置新的绑定
-        if (vehicleUUID != null) {
-            PLAYER_TO_VEHICLE.put(playerUUID, vehicleUUID);
-            VEHICLE_TO_PLAYER.put(vehicleUUID, playerUUID);
-        }
-
-        // 抛出事件
+        // 抛出事件（在锁外）
         NeoForge.EVENT_BUS.post(AffiliationChangeEvent.ofPlayerBind(playerUUID, vehicleUUID));
     }
 
@@ -459,6 +512,19 @@ public final class AffiliationRegistry {
             return RayPolicy.BLOCK;
         }
 
+        // ================================================================
+        //  CAMERA_AIM 路径：纯角色决定，不需要 sameVehicle/sameFaction 判断
+        //  所有实体结构统一 PENETRATE_AABB，弹射物/传感器统一 IGNORE
+        // ================================================================
+        if (rayType == RayType.CAMERA_AIM) {
+            return switch (target.role()) {
+                case PROJECTILE, SENSOR ->
+                    RayPolicy.IGNORE;
+                default ->
+                    RayPolicy.PENETRATE_AABB;
+            };
+        }
+
         boolean sameVehicle = isSameVehicle(viewer, target);
         boolean sameFaction = isSameFaction(viewer, target);
 
@@ -468,24 +534,6 @@ public final class AffiliationRegistry {
         }
 
         return switch (rayType) {
-            // ============================================================
-            //  摄像机瞄准射线
-            // ============================================================
-            case CAMERA_AIM -> {
-                // 全域 PENETRATE_AABB：穿透所有物理结构的 SubLevel 碰撞箱表面
-                // （灰色/红色线框），但保留命中内部方块自身碰撞箱的能力。
-                // 无论是否同车、同阵营——让准星可以穿过任何载具的结构外壳，
-                // 精确选中内部的方块实体。
-                yield switch (target.role()) {
-                    case PROJECTILE ->
-                        RayPolicy.IGNORE;   // 弹射物无内部方块，完全穿透
-                    case SENSOR ->
-                        RayPolicy.IGNORE;   // 传感器无内部方块，完全穿透
-                    default ->
-                        RayPolicy.PENETRATE_AABB; // 所有实体结构：穿透AABB但保留内部方块碰撞
-                };
-            }
-
             // ============================================================
             //  武器伤害射线
             // ============================================================
@@ -508,6 +556,14 @@ public final class AffiliationRegistry {
                 }
                 yield RayPolicy.BLOCK; // 其余正常阻挡
             }
+
+            // ============================================================
+            //  CAMERA_AIM 已被早返回拦截，不应到达此处
+            // ============================================================
+            case CAMERA_AIM -> {
+                IACP.LOGGER.warn("[AffiliationRegistry] CAMERA_AIM 未在 resolvePolicyImpl 中被早返回拦截");
+                yield RayPolicy.PENETRATE_AABB;
+            }
         };
     }
 
@@ -525,11 +581,14 @@ public final class AffiliationRegistry {
      * 清除所有注册数据（调试/重载用）。
      */
     public static void clearAll() {
-        SUBLEVEL_TO_TAG.clear();
-        GROUP_TO_MEMBERS.clear();
-        PLAYER_TO_VEHICLE.clear();
-        VEHICLE_TO_PLAYER.clear();
-        VEHICLE_TO_GROUPS.clear();
+        synchronized (WRITE_LOCK) {
+            SUBLEVEL_TO_TAG.clear();
+            GROUP_TO_MEMBERS.clear();
+            PLAYER_TO_VEHICLE.clear();
+            VEHICLE_TO_PLAYER.clear();
+            VEHICLE_TO_GROUPS.clear();
+            VEHICLE_TO_DIRECT_MEMBERS.clear();
+        }
         IACP.LOGGER.info("[AffiliationRegistry] 已清除所有索引");
     }
 

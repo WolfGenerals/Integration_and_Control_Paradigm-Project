@@ -133,8 +133,10 @@ public class ClientEvents {
     private static final int FIRE_COOLDOWN_TICKS = 3;
 
     /**
-     * 持续射线检测冷却（已废弃，现为每 tick 检测）
+     * 持续射线检测冷却（每 2 tick 执行一次以降低性能开销）
      */
+    private static int raycastCooldown = 0;
+
     /**
      * 返回挂载/卸载键位映射，用于注册。
      */
@@ -391,15 +393,18 @@ public class ClientEvents {
                         WeaponOverlay.fireAllTurrets(mc);
                     }
                 } else {
-                    // 每 tick 射线检测 → 发送命中点世界坐标
-                    // 服务端为每座炮塔独立计算角度：方向机（俯视投影）+ 高低机（侧面投影）
-                    Vec3 hitPos = WeaponOverlay.performRaycast();
-                    if (hitPos != null) {
-                        ModNetworking.sendToServer(
-                                new TurretTargetC2SPacket(
-                                        (float) hitPos.x,
-                                        (float) hitPos.y,
-                                        (float) hitPos.z));
+                    // 每 2 tick 射线检测 → 发送命中点世界坐标
+                    // 降低频率以减少 raycastGeneric 中全 SubLevel 遍历的开销
+                    if (--raycastCooldown <= 0) {
+                        raycastCooldown = 2;
+                        Vec3 hitPos = WeaponOverlay.performRaycast();
+                        if (hitPos != null) {
+                            ModNetworking.sendToServer(
+                                    new TurretTargetC2SPacket(
+                                            (float) hitPos.x,
+                                            (float) hitPos.y,
+                                            (float) hitPos.z));
+                        }
                     }
 
                     // 按住连发（最小间隔 3 tick）

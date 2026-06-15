@@ -73,7 +73,6 @@ public final class SableBlockHelper {
     @Nullable
     public static SubLevelAccess findSubLevelAt(Level level, Vec3 hitPos, BlockPos.MutableBlockPos outPos) {
         BlockPos hitBP = BlockPos.containing(hitPos);
-        IACP.LOGGER.info("[SableBlockHelper] ▶ findSubLevelAt: hitPos={}, physicalBlockPos={}", hitPos, hitBP);
 
         // ================================================================
         //  方案：遍历所有 SubLevel → 物理 BB 判含 → pose 变换 → 验证方块
@@ -83,7 +82,6 @@ public final class SableBlockHelper {
         // ================================================================
         SubLevelContainer container = SubLevelContainer.getContainer(level);
         if (container == null) {
-            IACP.LOGGER.info("[SableBlockHelper] ❌ SubLevelContainer.getContainer 返回 null");
             return null;
         }
 
@@ -120,8 +118,6 @@ public final class SableBlockHelper {
             // 4. 验证该局部坐标处有实际方块（非空气）
             BlockState state = level.getBlockState(localBP);
             if (state.isAir()) {
-                IACP.LOGGER.info("[SableBlockHelper]    SubLevel {} 物理 BB 含 hitPos 但局部 {} 为空气，跳过",
-                        sl.getUniqueId().toString().substring(0, 8), localBP);
                 continue;
             }
 
@@ -134,14 +130,10 @@ public final class SableBlockHelper {
         }
 
         if (bestAccess == null) {
-            IACP.LOGGER.info("[SableBlockHelper] ❌ hitPos {} 不在任何 SubLevel 的物理 BB 内", hitPos);
             return null;
         }
 
         outPos.set(bestLocalPos);
-        IACP.LOGGER.info("[SableBlockHelper] ✅ 命中 SubLevel={} @ localBP={} (物理世界 hitPos={})",
-                bestAccess.getUniqueId().toString().substring(0, 8),
-                bestLocalPos, hitPos);
         return bestAccess;
     }
 
@@ -172,43 +164,27 @@ public final class SableBlockHelper {
     }
 
     /**
-     * 沿射线查找所有可能命中的 SubLevel，返回最近的方块命中结果。
+     * 纯射线追踪：沿射线查找最近的 SubLevel 方块命中。
      * <p>
-     * 参考 {@code SableBridge.clipSubLevelsInner()} 实现：
-     * <ol>
-     * <li>用 {@link SubLevelContainer#getAllSubLevels()} 遍历所有 SubLevel</li>
-     * <li>跳过射线起点所在的 SubLevel（防止自伤——枪管/载具自身的 SubLevel）</li>
-     * <li>跳过排除集合中的所有 SubLevel（载具及其所有衍生结构，如砂轮、避雷针）</li>
-     * <li>对其余 SubLevel 将射线变换到局部空间做 {@code Level.clip()}</li>
-     * <li>将命中位置变换回世界空间，取最近者</li>
-     * </ol>
-     * <p>
-     * <b>核心原理</b>：武器射线返回的 AABB 表面交点无法通过 pose 变换精确映射到 SubLevel
-     * 内部方块（变换后为空气）。正确做法是将完整射线变换到 SubLevel 局部空间后重新 clip， 这样可以得到精确的 SubLevel
-     * 内部方块命中。
-     * <p>
-     * 相比旧方案（{@link #findSubLevelAt} 用单点判定），此方法不受 AABB 表面交点限制。
+     * 参考 {@code SableBridge.clipSubLevelsInner()} 实现。 仅跳过射线起点所在的
+     * SubLevel（防炮管自伤），不做任何归属/排除判断。 调用方自行决定是否施加伤害。
      *
      * @param level 世界
-     * @param from 射线起点（物理世界坐标，如炮口位置）
+     * @param from 射线起点（物理世界坐标）
      * @param to 射线终点（物理世界坐标）
-     * @param exclusions 要排除的 SubLevel UUID 集合（载具及其所有衍生结构），可为 null
-     * @return 最近的方块命中结果（BlockPos 为 plot chunk 局部坐标，Location 为世界坐标）， 若无命中返回 null
+     * @return 最近的方块命中结果，无命中返回 null
      */
     @Nullable
-    public static BlockHitResult rayTraceSubLevels(Level level, Vec3 from, Vec3 to,
-            @Nullable Set<UUID> exclusions) {
+    public static BlockHitResult rayTraceSubLevels(Level level, Vec3 from, Vec3 to) {
         if (from.equals(to)) {
             return null;
         }
 
-        // 1. 用 SubLevelContainer 遍历所有 SubLevel（比 getAllIntersecting 更可靠）
         SubLevelContainer container = SubLevelContainer.getContainer(level);
         if (container == null) {
             return null;
         }
 
-        SubLevelAccess bestAccess = null;
         BlockHitResult bestHit = null;
         double bestDistSq = Double.MAX_VALUE;
 
@@ -217,32 +193,20 @@ public final class SableBlockHelper {
                 continue;
             }
 
-            UUID slUUID = sl.getUniqueId();
-
-            // ---- 排除检查 ----
-            // A) 跳过排除集合中的所有 SubLevel（载具自身 + 砂轮 + 避雷针等衍生结构）
-            if (exclusions != null && exclusions.contains(slUUID)) {
-                continue;
-            }
-
             var physBB = sl.boundingBox();
             if (physBB == null) {
                 continue;
             }
 
-            // B) 跳过射线起点所在 SubLevel（防止枪管/炮管自伤）
-            //    如果 origin 在物理 BB 内部，说明射线是从这个 SubLevel 内部发出的，
-            //    这个 SubLevel 就是"自己"（枪管/避雷针），不应受伤害
-            //    ⚠ 使用 MARGIN 扩展 BB：炮口（origin）可能在避雷针 BB 边界外（偏移了 0.5 格），
-            //    严格内含判断会漏掉这种情况。用 margin = 0.1 格扩展 BB 来覆盖。
-            final double ORIGIN_MARGIN = 0.1;
-            if (from.x >= physBB.minX() - ORIGIN_MARGIN && from.x <= physBB.maxX() + ORIGIN_MARGIN
-                    && from.y >= physBB.minY() - ORIGIN_MARGIN && from.y <= physBB.maxY() + ORIGIN_MARGIN
-                    && from.z >= physBB.minZ() - ORIGIN_MARGIN && from.z <= physBB.maxZ() + ORIGIN_MARGIN) {
+            // 跳过射线起点所在的 SubLevel（防止枪管自伤）
+            // ORIGIN_MARGIN=1.0 覆盖炮口偏移 0.5 格的情况
+            final double M = 1.0;
+            if (from.x >= physBB.minX() - M && from.x <= physBB.maxX() + M
+                    && from.y >= physBB.minY() - M && from.y <= physBB.maxY() + M
+                    && from.z >= physBB.minZ() - M && from.z <= physBB.maxZ() + M) {
                 continue;
             }
 
-            // 快速剔除：检查射线是否经过此 SubLevel 的物理 AABB
             Vec3 dir = to.subtract(from).normalize();
             double maxDist = from.distanceTo(to);
             Vec3 bbHit = rayAABBIntersection(from, dir,
@@ -256,42 +220,30 @@ public final class SableBlockHelper {
             }
 
             Pose3dc pose = sl.logicalPose();
-
-            // 2. 将完整射线变换到 SubLevel 局部空间（plot chunk 坐标系）
             Vec3 localFrom = pose.transformPositionInverse(from);
             Vec3 localTo = pose.transformPositionInverse(to);
             if (localFrom.equals(localTo)) {
                 continue;
             }
 
-            // 3. 在 SubLevel 局部空间做射线检测
-            // 使用 COLLIDER 仅检测方块碰撞箱，忽略流体
             var clipCtx = new net.minecraft.world.level.ClipContext(
                     localFrom, localTo,
                     net.minecraft.world.level.ClipContext.Block.COLLIDER,
                     net.minecraft.world.level.ClipContext.Fluid.NONE,
-                    CollisionContext.empty()
-            );
+                    CollisionContext.empty());
             BlockHitResult localHit = level.clip(clipCtx);
 
             if (localHit != null && localHit.getType() != net.minecraft.world.phys.HitResult.Type.MISS) {
-                // 4. 将命中位置变换回世界空间（blockPos 保持 plot chunk 局部坐标）
                 Vec3 worldHitLoc = pose.transformPosition(localHit.getLocation());
                 double distSq = from.distanceToSqr(worldHitLoc);
-
                 if (distSq < bestDistSq) {
                     bestDistSq = distSq;
-                    bestAccess = sl;
                     bestHit = new BlockHitResult(
-                            worldHitLoc,
-                            localHit.getDirection(),
-                            localHit.getBlockPos(),
-                            localHit.isInside()
-                    );
+                            worldHitLoc, localHit.getDirection(),
+                            localHit.getBlockPos(), localHit.isInside());
                 }
             }
         }
-
         return bestHit;
     }
 
@@ -380,16 +332,15 @@ public final class SableBlockHelper {
             UUID slUUID = sl.getUniqueId();
             AffiliationTag targetTag = AffiliationRegistry.getAffiliation(slUUID);
 
-            // 无归属信息的 SubLevel → 使用默认策略 BLOCK
-            if (targetTag == null) {
-                // 继续检测但不做特殊处理
-            } else {
-                RayPolicy policy = AffiliationRegistry.resolvePolicy(rayType, viewerTag, targetTag);
+            // 预先解析策略（缓存结果避免后续重复调用）
+            RayPolicy policy = null;
+            if (targetTag != null) {
+                policy = AffiliationRegistry.resolvePolicy(rayType, viewerTag, targetTag);
                 if (policy == RayPolicy.IGNORE) {
                     continue; // 完全跳过
                 }
                 // PENETRATE_AABB 需要特殊处理：不在这里跳过，而是在命中后判断
-            }
+            } // targetTag == null → policy 保持 null，后续按 BLOCK 处理
 
             var physBB = sl.boundingBox();
             if (physBB == null) {
@@ -430,15 +381,9 @@ public final class SableBlockHelper {
                 Vec3 worldHitLoc = pose.transformPosition(localHit.getLocation());
                 double distSq = from.distanceToSqr(worldHitLoc);
 
-                // 对于 PENETRATE_AABB 策略：即使内部方块命中，也检查是否属于可穿透目标
-                if (targetTag != null) {
-                    RayPolicy policy = AffiliationRegistry.resolvePolicy(rayType, viewerTag, targetTag);
-                    if (policy == RayPolicy.PENETRATE_AABB) {
-                        continue; // 穿透整个 SubLevel（外层 AABB + 内部方块均穿透）
-                    }
-                    if (policy == RayPolicy.IGNORE) {
-                        continue; // 安全防护
-                    }
+                // 使用缓存的 policy 判断：PENETRATE_AABB 则穿透
+                if (policy == RayPolicy.PENETRATE_AABB) {
+                    continue; // 穿透整个 SubLevel（外层 AABB + 内部方块均穿透）
                 }
 
                 if (distSq < bestDistSq) {
