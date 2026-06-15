@@ -66,7 +66,7 @@ public class WeaponOverlay {
     /**
      * 准星偏向最大锥角（度）。弹道在此锥角内被拉向玩家准星瞄准点， 用于掩饰炮塔旋转延迟带来的命中偏差。
      */
-    private static final double AIM_BIAS_MAX_DEG = 1.0;
+    private static final double AIM_BIAS_MAX_DEG = 5.0;
 
     /**
      * 最后一次射线检测的命中点世界坐标，{@code null} 表示未命中
@@ -225,7 +225,8 @@ public class WeaponOverlay {
                 pose.position().z() + fwd.z * 0.5);
         Vec3 dir = new Vec3(fwd.x, fwd.y, fwd.z);
 
-        // 准星偏向：在 ±1° 锥角内将弹道拉向玩家瞄准点
+        //如果想增大角度，可以调整 AIM_BIAS_MAX_DEG 的值
+        // 准星偏向：在 ±5° 锥角内将弹道拉向玩家瞄准点
         // 掩饰炮塔旋转延迟带来的命中偏差，提升响应感
         dir = applyAimBias(dir, origin, lastHitPos);
 

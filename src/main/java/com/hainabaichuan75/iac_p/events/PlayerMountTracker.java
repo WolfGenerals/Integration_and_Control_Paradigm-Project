@@ -3,7 +3,6 @@ package com.hainabaichuan75.iac_p.events;
 import com.hainabaichuan75.iac_p.IACP;
 import com.hainabaichuan75.iac_p.affiliation.AffiliationHelper;
 import com.hainabaichuan75.iac_p.affiliation.AffiliationTag;
-import com.hainabaichuan75.iac_p.content.blocks.turret.TurretAimController;
 import com.hainabaichuan75.iac_p.events.PartDamageCache;
 import com.hainabaichuan75.iac_p.index.ModBlocks;
 import com.hainabaichuan75.iac_p.network.ModNetworking;
@@ -284,13 +283,7 @@ public class PlayerMountTracker {
     // ====== 每 tick 处理 ======
     @SubscribeEvent
     public static void onServerTick(ServerTickEvent.Post event) {
-        // 驱动炮塔自动瞄准（即使 MOUNTED 为空也可能有残留目标）
-        MinecraftServer srv = event.getServer();
-        for (var serverLevel : srv.getAllLevels()) {
-            if (serverLevel instanceof ServerLevel sl) {
-                TurretAimController.tick(sl);
-            }
-        }
+        // 炮塔瞄准已移至 TurretTargetC2SPacket.handle() 直接驱动，不再依赖 tick
 
         if (MOUNTED.isEmpty()) {
             return;

@@ -1,3 +1,9 @@
+---
+updated: 2026-06-13
+status: current
+maintainer: @项目协作者
+---
+
 # 一、BlockEntity 接口选择
 
 这是**代价最高**的教训之一。

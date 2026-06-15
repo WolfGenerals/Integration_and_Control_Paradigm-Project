@@ -1,3 +1,9 @@
+---
+updated: 2026-06-13
+status: current
+maintainer: @项目协作者
+---
+
 # 九、setPos vs teleportTo
 
 ```java
