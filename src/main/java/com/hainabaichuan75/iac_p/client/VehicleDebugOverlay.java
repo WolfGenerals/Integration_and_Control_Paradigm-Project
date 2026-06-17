@@ -38,13 +38,13 @@ import java.util.List;
 @EventBusSubscriber(modid = "iac_p", value = Dist.CLIENT)
 public class VehicleDebugOverlay {
 
-    /** 数据刷新间隔（tick） */
-    private static final int UPDATE_INTERVAL = 3;
+    /** 数据刷新间隔（tick）—— 每 tick 采集，从缓存读取，不再需要等 3 tick 的批处理间隔 */
+    private static final int UPDATE_INTERVAL = 1;
     private static int updateCooldown = 0;
 
     // ===== 缓存数据 =====
     private static double engineRpm = 0;
-    /** 质量自适应有效扭矩，由 CockpitBE 同步到客户端 */
+    /** 引擎输出扭矩（Nm），含扭矩曲线修正 × 油门，由 CockpitBE 同步到客户端 */
     private static double engineTorque = PowertrainConstants.ENGINE_TORQUE;
     private static int gear = 0;
     private static double gearboxRpm = 0;
@@ -59,6 +59,12 @@ public class VehicleDebugOverlay {
     private static double frictionPct = 0;
     /** 力需求/摩擦预算比率（可 > 100%，表示打滑程度） */
     private static double frictionDemandRatio = 0;
+
+    /** 油门深度百分比 [0, 100] */
+    private static double throttlePct = 0;
+    /** 发动机是否熄火 */
+    private static boolean stalled = false;
+
 
     /** 渲染行缓存 */
     private static final List<Component> displayLines = new ArrayList<>();
@@ -171,26 +177,62 @@ public class VehicleDebugOverlay {
         }
         double avgR = wheelsWithTire > 0 ? totalRadius / wheelsWithTire : 0.25;
 
-        // 动力系统
-        if (cockpit != null) {
+        // ── 动力系统：优先从 VehicleStateS2CPacket 缓存读取（每 2 tick 推送）──
+        // 缓存数据由服务端实时推送，油门稳定时 RPM/车速/扭矩仍持续更新。
+        // 回退到 CockpitBE 的 NBT 值（块加载时首次填充）。
+        //
+        // 注：torquePerWheel 不单独同步，齿轮箱输出扭矩从 engineTorque × 齿比推算。
+        if (ClientMountHandler.isMounted() && ClientMountHandler.getCachedEngineRpm() > 0) {
+            // 缓存有效：使用实时推送数据
+            engineRpm      = ClientMountHandler.getCachedEngineRpm();
+            engineTorque   = ClientMountHandler.getCachedEffectiveTorque();
+            gear           = ClientMountHandler.getCachedCurrentGear();
+            throttlePct    = ClientMountHandler.getCachedThrottleLevel() * 100.0;
+            stalled        = ClientMountHandler.isCachedStalled();
+            // 轮端数据：RPM 从 CockpitBE 读取，扭矩从 engineTorque × 齿比推算
+            if (cockpit != null) {
+                avgWheelRpm = cockpit.getTargetWheelRpm();
+            } else {
+                double ratio = Math.abs(PowertrainConstants.getCurrentRatio(gear)) * PowertrainConstants.FINAL_DRIVE_RATIO;
+                avgWheelRpm = ratio > 0.001 ? engineRpm / ratio : 0;
+            }
+            int w = Math.max(totalWheels, 1);
+            double effectiveRatio = gear != 0
+                    ? Math.abs(PowertrainConstants.getCurrentRatio(gear)) * PowertrainConstants.FINAL_DRIVE_RATIO
+                    : 0;
+            avgWheelTorque = effectiveRatio > 0 ? engineTorque * effectiveRatio / w : 0;
+            gearboxRpm    = avgWheelRpm;
+            gearboxTorque = avgWheelTorque * w;
+        } else if (cockpit != null) {
+            // 降级：缓存未就绪时使用 NBT 同步值
             engineRpm      = cockpit.getEngineRpm();
             engineTorque   = cockpit.getEffectiveTorque();
             gear           = cockpit.getCurrentGear();
             int w          = Math.max(totalWheels, 1);
-            var out        = cockpit.getWheelOutput(w);
-            avgWheelRpm    = out.wheelRpm();
-            avgWheelTorque = out.wheelTorque();
-            gearboxRpm     = out.wheelRpm();
-            gearboxTorque  = out.wheelTorque() * w;
+            avgWheelRpm    = cockpit.getTargetWheelRpm();
+            double effectiveRatio = gear != 0
+                    ? Math.abs(PowertrainConstants.getCurrentRatio(gear)) * PowertrainConstants.FINAL_DRIVE_RATIO
+                    : 0;
+            avgWheelTorque = effectiveRatio > 0 ? engineTorque * effectiveRatio / w : 0;
+            gearboxRpm     = avgWheelRpm;
+            gearboxTorque  = avgWheelTorque * w;
+            throttlePct    = cockpit.getThrottleLevel() * 100.0;
+            stalled        = cockpit.isStalled();
         } else {
             engineRpm = 0; gear = 0;
             gearboxRpm = 0; gearboxTorque = 0;
             avgWheelRpm = 0; avgWheelTorque = 0;
+            throttlePct = 0; stalled = false;
         }
 
-        // 速度（使用 SubLevel 内部已知方块位置查询，避免 pose.position() 不在 Plot 内）
+        // 速度
         idealSpeedMs = avgWheelRpm * Math.PI * 2.0 / 60.0 * avgR;
-        if (samplePos != null) {
+        // 实际车速：优先使用服务端推送的物理引擎速度（更准确）
+        // 降级到客户端 Sable API 查询
+        double cachedSpeed = ClientMountHandler.getCachedVehicleSpeedMs();
+        if (cachedSpeed > 0) {
+            currentSpeedMs = cachedSpeed;
+        } else if (samplePos != null) {
             Vector3d vel = Sable.HELPER.getVelocity(mc.level,
                     new org.joml.Vector3d(samplePos.getX() + 0.5, samplePos.getY() + 0.5, samplePos.getZ() + 0.5));
             currentSpeedMs = vel != null ? vel.length() : 0;
@@ -207,16 +249,16 @@ public class VehicleDebugOverlay {
             mass = 2000.0; // 降级：按单方块估算，忽略全量扫描
         }
 
-        // 力需求/摩擦预算比（基于物理的摩擦圆约束值）：
-        //   < 100% = 抓地有余
-        //   = 100% = 摩擦圆刚好饱和
-        //   > 100% = 需求超抓地 → 轮子空转/打滑（显示动力盈余）
-        // 取所有轮子的最大值（最恶劣的那个轮子）
+        // 摩擦需求比（Binary Grip）：
+        //   负值 = 有余量, 0% = 刚好饱和, 正值 = 打滑程度
+        // 取所有轮子的平均值反映整体抓地状态
         frictionDemandRatio = 0;
+        int gripCount = 0;
         for (var s : susp) {
-            double r = s.getFrictionDemandRatio();
-            if (r > frictionDemandRatio) frictionDemandRatio = r;
+            frictionDemandRatio += s.getFrictionDemandRatio();
+            gripCount++;
         }
+        frictionDemandRatio = gripCount > 0 ? frictionDemandRatio / gripCount : 0;
         frictionPct = frictionDemandRatio * 100.0;
 
         buildLines();
@@ -228,15 +270,51 @@ public class VehicleDebugOverlay {
 
     private static void buildLines() {
         displayLines.clear();
-        displayLines.add(line("debug.iac_p.overlay.mass",        String.format("%,.0f kg", mass)));
-        displayLines.add(line("debug.iac_p.overlay.engine",      String.format("%,.0f RPM  |  %.0f Nm", engineRpm, engineTorque)));
-        displayLines.add(line("debug.iac_p.overlay.gear_wheels", (gear == -1 ? "R" : gear == 0 ? "N" : String.valueOf(gear))
-                + " 档  |  " + wheelsWithTire + "/" + totalWheels + " 轮着地"));
-        displayLines.add(line("debug.iac_p.overlay.gearbox_out", String.format("%,.0f RPM  |  %.1f Nm", gearboxRpm, gearboxTorque)));
-        displayLines.add(line("debug.iac_p.overlay.tire_avg",    String.format("%,.0f RPM  |  %.1f Nm/轮", avgWheelRpm, avgWheelTorque)));
-        displayLines.add(line("debug.iac_p.overlay.ideal_speed", String.format("%.2f m/s", idealSpeedMs)));
-        displayLines.add(line("debug.iac_p.overlay.current_speed", String.format("%.2f m/s  (%.1f km/h)", currentSpeedMs, currentSpeedMs * 3.6)));
-        displayLines.add(line("debug.iac_p.overlay.friction_demand", String.format("%.0f%%", frictionPct)));
+
+        if (gear == 0) {
+            // ═══ 空档 / 测试架模式：仅显示发动机独立数据 ═══
+            displayLines.add(Component.translatable("debug.iac_p.overlay.test_stand"));
+            String stallTag = stalled ? " §c⛔" : " §a✔";
+            displayLines.add(line("debug.iac_p.overlay.engine",
+                    String.format("%,.0f RPM  |  %.0f Nm  |  油门 %.0f%%%s",
+                            engineRpm, engineTorque, throttlePct, stallTag)));
+            // 输入调试
+            String upIcon = com.hainabaichuan75.iac_p.client.ClientEvents.debugThrottleUp ? "§a↑" : "§8↑";
+            String downIcon = com.hainabaichuan75.iac_p.client.ClientEvents.debugThrottleDown ? "§a↓" : "§8↓";
+            int dir = com.hainabaichuan75.iac_p.client.ClientEvents.debugLastThrottleDir;
+            String dirStr = dir > 0 ? "§e+1" : dir < 0 ? "§e-1" : "§70";
+            displayLines.add(Component.literal("§7输入: ")
+                    .append(Component.literal(upIcon + " "))
+                    .append(Component.literal(downIcon + " "))
+                    .append(Component.literal("→ 方向 "))
+                    .append(Component.literal(dirStr)));
+        } else {
+            // ═══ 在档模式：显示完整的载具动力系统数据 ═══
+            displayLines.add(line("debug.iac_p.overlay.mass",        String.format("%,.0f kg", mass)));
+            String stallTag = stalled ? " §c⛔熄火" : "";
+            displayLines.add(line("debug.iac_p.overlay.engine",
+                    String.format("%,.0f RPM  |  %.0f Nm  |  油门 %.0f%%%s", engineRpm, engineTorque, throttlePct, stallTag)));
+            boolean shifting = ClientMountHandler.isCachedShifting();
+            String shiftIcon = shifting ? " §e⚡SHIFT" : "";
+            displayLines.add(line("debug.iac_p.overlay.gear_wheels", (gear == -1 ? "R" : gear == 0 ? "N" : String.valueOf(gear))
+                    + " 档" + shiftIcon + "  |  " + wheelsWithTire + "/" + totalWheels + " 轮着地"));
+            displayLines.add(line("debug.iac_p.overlay.gearbox_out", String.format("%,.0f RPM  |  %.1f Nm", gearboxRpm, gearboxTorque)));
+            displayLines.add(line("debug.iac_p.overlay.tire_avg",    String.format("%,.0f RPM  |  %.1f Nm/轮", avgWheelRpm, avgWheelTorque)));
+            displayLines.add(line("debug.iac_p.overlay.ideal_speed", String.format("%.2f m/s", idealSpeedMs)));
+            displayLines.add(line("debug.iac_p.overlay.current_speed", String.format("%.2f m/s  (%.1f km/h)", currentSpeedMs, currentSpeedMs * 3.6)));
+            displayLines.add(line("debug.iac_p.overlay.friction_demand", String.format("%.0f%%", frictionPct)));
+
+            // ── 输入调试 ──
+            String upIcon = com.hainabaichuan75.iac_p.client.ClientEvents.debugThrottleUp ? "§a↑" : "§8↑";
+            String downIcon = com.hainabaichuan75.iac_p.client.ClientEvents.debugThrottleDown ? "§a↓" : "§8↓";
+            int dir = com.hainabaichuan75.iac_p.client.ClientEvents.debugLastThrottleDir;
+            String dirStr = dir > 0 ? "§e+1" : dir < 0 ? "§e-1" : "§70";
+            displayLines.add(Component.literal("§7输入: ")
+                    .append(Component.literal(upIcon + " "))
+                    .append(Component.literal(downIcon + " "))
+                    .append(Component.literal("→ 方向 "))
+                    .append(Component.literal(dirStr)));
+        }
     }
 
     private static Component line(String labelKey, String value) {

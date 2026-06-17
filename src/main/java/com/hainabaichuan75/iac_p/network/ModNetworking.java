@@ -15,6 +15,7 @@ import com.hainabaichuan75.iac_p.network.packets.AnchorDataS2CPacket;
 import com.hainabaichuan75.iac_p.network.packets.GrindstoneConfigC2SPacket;
 import com.hainabaichuan75.iac_p.network.packets.SmartMapC2SPacket;
 import com.hainabaichuan75.iac_p.network.packets.VehicleControlC2SPacket;
+import com.hainabaichuan75.iac_p.network.packets.VehicleStateS2CPacket;
 import com.hainabaichuan75.iac_p.network.packets.VehicleKeyConfigC2SPacket;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.server.level.ServerPlayer;
@@ -106,6 +107,11 @@ public class ModNetworking {
                 SmartMapC2SPacket.TYPE,
                 SmartMapC2SPacket.STREAM_CODEC,
                 SmartMapC2SPacket::handle
+        );
+        registrar.playToClient(
+                VehicleStateS2CPacket.TYPE,
+                VehicleStateS2CPacket.STREAM_CODEC,
+                VehicleStateS2CPacket::handle
         );
 
     }

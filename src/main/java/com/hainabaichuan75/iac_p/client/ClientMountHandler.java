@@ -163,9 +163,9 @@ public class ClientMountHandler {
     private static boolean smartMappingActive = false;
 
     /**
-     * 当前载具的智能映射方向是否已反转（从 CockpitBE 同步）
+     * 当前选中的驾驶技能 ID（从 CockpitBE 同步）
      */
-    private static boolean smartMappingReversed = false;
+    private static String activeSkillId = com.hainabaichuan75.iac_p.skill.SkillRegistry.DEFAULT_SKILL_ID;
 
     public static boolean isSmartMappingActive() {
         return smartMappingActive;
@@ -175,12 +175,18 @@ public class ClientMountHandler {
         smartMappingActive = active;
     }
 
-    public static boolean isSmartMappingReversed() {
-        return smartMappingReversed;
+    /**
+     * @return 当前选中的驾驶技能 ID
+     */
+    public static String getActiveSkillId() {
+        return activeSkillId;
     }
 
-    public static void setSmartMappingReversed(boolean reversed) {
-        smartMappingReversed = reversed;
+    /**
+     * 设置当前选中的驾驶技能 ID。
+     */
+    public static void setActiveSkillId(String skillId) {
+        activeSkillId = skillId != null ? skillId : com.hainabaichuan75.iac_p.skill.SkillRegistry.DEFAULT_SKILL_ID;
     }
 
     /**
@@ -223,22 +229,23 @@ public class ClientMountHandler {
                     sbe.getActiveKeyBrake()
             );
         });
-        // 同步客户端缓存状态（切换：再点一次恢复）
-        smartMappingReversed = !smartMappingReversed;
     }
 
     /**
-     * 在 SubLevel 中查找驾驶舱 BE，同步其 smartMappingActive/smartMappingReversed 状态到缓存。
+     * 在 SubLevel 中查找驾驶舱 BE，同步其 smartMappingActive 和 activeSkillId 状态到缓存。
      */
     public static void syncSmartMappingState(SubLevel subLevel, Level level) {
         smartMappingActive = false;
-        smartMappingReversed = false;
+        activeSkillId = com.hainabaichuan75.iac_p.skill.SkillRegistry.DEFAULT_SKILL_ID;
 
         SubLevelScanner.forEachBlock(subLevel, level, (worldPos, state, be) -> {
             if (state.getBlock() instanceof com.hainabaichuan75.iac_p.content.blocks.cockpit.CockpitBlock
                     && be instanceof com.hainabaichuan75.iac_p.content.blocks.cockpit.CockpitBlockEntity cockpit) {
                 smartMappingActive = cockpit.isSmartMappingActive();
-                smartMappingReversed = cockpit.isSmartMappingReversed();
+                String skillId = cockpit.getActiveSkillId();
+                if (skillId != null && !skillId.isEmpty()) {
+                    activeSkillId = skillId;
+                }
             }
         });
     }
@@ -372,6 +379,70 @@ public class ClientMountHandler {
         stationaryCameraPos = null;
     }
 
+    // ==================================================================
+    //  车辆实时状态缓存（由 VehicleStateS2CPacket 每 2 tick 填充）
+    // ==================================================================
+    //  覆盖层从此处读取高频动态数据，与 NBT 块实体同步解耦，
+    //  消除油门稳定时 RPM/车速不更新的问题。
+
+    /** 发动机当前转速（RPM） */
+    private static double cachedEngineRpm = 0;
+    /** 油门踏板深度 [0.0, 1.0] */
+    private static double cachedThrottleLevel = 0;
+    /** 当前档位 */
+    private static int cachedCurrentGear = 0;
+    /** 发动机是否熄火 */
+    private static boolean cachedStalled = false;
+    /** 引擎输出扭矩（Nm），含扭矩曲线修正 × 油门（来自服务端同步） */
+    private static double cachedEffectiveTorque = 0;
+    /** 载具当前速度（m/s） */
+    private static double cachedVehicleSpeedMs = 0;
+    /** 是否正在换挡（动力中断期间） */
+    private static boolean cachedIsShifting = false;
+
+    /**
+     * 由 VehicleStateS2CPacket.handle() 调用，更新缓存。
+     * 所有字段一次性写入，避免部分更新导致覆盖层读到不一致状态。
+     */
+    public static void updateVehicleState(
+            double engineRpm, double throttleLevel, int currentGear,
+            boolean stalled, double effectiveTorque, double vehicleSpeedMs,
+            boolean isShifting) {
+        cachedEngineRpm = engineRpm;
+        cachedThrottleLevel = throttleLevel;
+        cachedCurrentGear = currentGear;
+        cachedStalled = stalled;
+        cachedEffectiveTorque = effectiveTorque;
+        cachedVehicleSpeedMs = vehicleSpeedMs;
+        cachedIsShifting = isShifting;
+    }
+
+    /** @return 缓存的发动机转速（RPM） */
+    public static double getCachedEngineRpm() { return cachedEngineRpm; }
+    /** @return 缓存的油门深度 [0.0, 1.0] */
+    public static double getCachedThrottleLevel() { return cachedThrottleLevel; }
+    /** @return 缓存的当前档位 */
+    public static int getCachedCurrentGear() { return cachedCurrentGear; }
+    /** @return 缓存的熄火状态 */
+    public static boolean isCachedStalled() { return cachedStalled; }
+    /** @return 缓存的有效扭矩（Nm） */
+    public static double getCachedEffectiveTorque() { return cachedEffectiveTorque; }
+    /** @return 缓存的载具速度（m/s） */
+    public static double getCachedVehicleSpeedMs() { return cachedVehicleSpeedMs; }
+    /** @return 是否正在换挡 */
+    public static boolean isCachedShifting() { return cachedIsShifting; }
+
+    /** 下车时清空状态缓存 */
+    private static void clearVehicleStateCache() {
+        cachedEngineRpm = 0;
+        cachedThrottleLevel = 0;
+        cachedCurrentGear = 0;
+        cachedStalled = false;
+        cachedEffectiveTorque = 0;
+        cachedVehicleSpeedMs = 0;
+        cachedIsShifting = false;
+    }
+
     // ====== 公开 API ======
     /**
      * 处理上车/下车状态（由 {@code MountedStateS2CPacket} 调用）。
@@ -410,9 +481,11 @@ public class ClientMountHandler {
             clearAllOrientationCache();
             SUSPENSION_POSITIONS.clear();
             smartMappingActive = false;
-            smartMappingReversed = false;
+            activeSkillId = com.hainabaichuan75.iac_p.skill.SkillRegistry.DEFAULT_SKILL_ID;
             // 强制关闭哨兵模式
             disableStationaryCamera();
+            // 清空车辆状态缓存
+            clearVehicleStateCache();
         }
     }
 
@@ -476,7 +549,7 @@ public class ClientMountHandler {
         clearAllOrientationCache();
         SUSPENSION_POSITIONS.clear();
         smartMappingActive = false;
-        smartMappingReversed = false;
+        activeSkillId = com.hainabaichuan75.iac_p.skill.SkillRegistry.DEFAULT_SKILL_ID;
     }
 
     // ====== 每 Client Tick：Plan B 摄像机跟随 ======

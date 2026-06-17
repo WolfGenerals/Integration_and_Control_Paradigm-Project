@@ -1,92 +1,93 @@
 /*
- * 变速箱模型 —— 档位管理、换挡逻辑、动力输出计算。
+ * 变速箱模型 —— 纯比率变换：扭矩放大 + 转速减速 + 档位管理。
  *
- * 不持有状态，所有方法均为纯函数（除齿轮同步的 engineRpm 外，
- * 换挡方法接收并返回更新后的 engineRpm）。
+ * 变速箱是纯数学变换器，不对发动机状态做任何假设：
+ *   1. 扭矩b = 扭矩a × 齿比（扭矩放大）
+ *   2. 转速b = 转速a / 齿比（转速减速）
+ *   3. 换挡真空期：6 tick 输出归零
+ *
+ * 发动机转速不受变速箱影响——在档时由轮速运动学约束，
+ * 空档时由油门直控（见 EngineModel.computeThrottleControlledRun）。
+ *
+ * 所有方法均为纯函数。档位状态由 CockpitBlockEntity 管理。
  */
 package com.hainabaichuan75.iac_p.content.blocks.cockpit;
 
 import net.minecraft.util.Mth;
 
 /**
- * 变速箱模型 —— 纯档位计算，不涉及发动机状态。
+ * 变速箱模型 —— 纯扭矩/转速变换，不涉及离合器或发动机状态。
  */
 public final class TransmissionModel {
 
-    /**
-     * 动力系统输出记录 —— 每个轮子应获得的目标 RPM 和可用扭矩。
-     * <p>
-     * 由 {@link #computeWheelOutput} 返回，供悬挂 BE 的 P 控制器使用。
-     *
-     * @param wheelRpm    目标轮端 RPM（含方向符号）
-     * @param wheelTorque 每轮可用扭矩（Nm，均摊后）
-     */
-    public record PowertrainOutput(double wheelRpm, double wheelTorque) {}
+    // ==================================================================
+    //  变速箱变换
+    // ==================================================================
 
     /**
-     * 计算每个轮子的目标 RPM 和可用扭矩。
+     * 变速箱输出结果。
      *
-     * <p>核心逻辑：
-     * <ul>
-     *   <li>空档或倒车简单处理</li>
-     *   <li>有油门时用指令转速（油门位置决定），松油时用实际发动机转速</li>
-     *   <li>智能映射反转时反转齿比符号</li>
-     *   <li>差速均摊：各轮同转速，扭矩平分</li>
-     * </ul>
-     *
-     * @param currentGear       当前档位（-1=R, 0=N, 1~5）
-     * @param throttleLevel     油门踏板位置 0.0~1.0
-     * @param engineRpm         当前发动机 RPM
-     * @param effectiveTorque   质量自适应扭矩（Nm）
-     * @param smartMappingActive  智能映射是否启用
-     * @param smartMappingReversed 智能映射是否反转
-     * @param totalWheels       轮子总数
-     * @return 动力输出（空档时 wheelRpm=0, wheelTorque=0）
+     * @param torqueB 输出扭矩（Nm）= torqueA × 有效齿比
+     * @param rpmB    输出转速（RPM）= rpmA / 有效齿比 × 方向符号
      */
-    public static PowertrainOutput computeWheelOutput(
-            int currentGear, double throttleLevel,
-            double engineRpm, double effectiveTorque,
-            boolean smartMappingActive, boolean smartMappingReversed,
-            int totalWheels) {
+    public record TransmissionOutput(double torqueB, double rpmB) {}
 
-        if (currentGear == 0 || totalWheels <= 0) {
-            return new PowertrainOutput(0.0, 0.0);
-        }
+    /**
+     * 执行变速箱纯比率变换。
+     *
+     * <p>将发动机侧扭矩/转速通过当前档位齿比变换到变速箱输出侧。
+     * 空档或无效档位返回零。
+     *
+     * @param inputTorque 输入扭矩（Nm，已扣摩擦的净扭矩）
+     * @param inputRpm    输入转速（RPM）
+     * @param gear        当前档位（-1=R, 0=N, 1~5）
+     * @return 变速箱输出（空档时全零）
+     */
+    public static TransmissionOutput computeOutput(double inputTorque, double inputRpm, int gear) {
+        if (gear == 0) return new TransmissionOutput(0, 0);
+        double effectiveRatio = computeEffectiveRatio(gear);
+        double sign = Math.signum(PowertrainConstants.getCurrentRatio(gear));
+        return new TransmissionOutput(
+                inputTorque * effectiveRatio,
+                inputRpm / effectiveRatio * sign
+        );
+    }
 
-        double ratio = PowertrainConstants.getCurrentRatio(currentGear);
-        double absRatio = Math.abs(ratio);
-        double effectiveRatio = absRatio * PowertrainConstants.FINAL_DRIVE_RATIO;
+    // ==================================================================
+    //  辅助方法
+    // ==================================================================
 
-        // ── 目标轮端转速 ──
-        double wheelRpm;
-        if (throttleLevel > 0.01) {
-            // 油门踩下：指令转速 = 油门位置对应的期望转速
-            double commandedRpm = PowertrainConstants.ENGINE_IDLE_RPM
-                    + (PowertrainConstants.ENGINE_MAX_RPM - PowertrainConstants.ENGINE_IDLE_RPM) * throttleLevel;
-            double ratioSign = Math.signum(ratio);
-            if (smartMappingActive && smartMappingReversed) {
-                ratioSign = -ratioSign;
-            }
-            wheelRpm = (commandedRpm / effectiveRatio) * ratioSign;
-        } else {
-            // 松油：实际发动机转速（跟随耦合）
-            double ratioSign = Math.signum(ratio);
-            if (smartMappingActive && smartMappingReversed) {
-                ratioSign = -ratioSign;
-            }
-            wheelRpm = (engineRpm / effectiveRatio) * ratioSign;
-        }
+    /**
+     * 计算变速箱输出侧的目标转速。
+     *
+     * <p>wheelRpm = engineRpm / |ratio| / finalDrive × sign(ratio)
+     *
+     * @param gear      当前档位
+     * @param engineRpm 发动机 RPM
+     * @return 输出侧 RPM（含方向），空档返回 0
+     */
+    public static double computeTargetWheelRpm(int gear, double engineRpm) {
+        if (gear == 0 || engineRpm <= 0) return 0;
+        double ratio = PowertrainConstants.getCurrentRatio(gear);
+        double effectiveRatio = Math.abs(ratio) * PowertrainConstants.FINAL_DRIVE_RATIO;
+        return (engineRpm / effectiveRatio) * Math.signum(ratio);
+    }
 
-        // ── 扭矩分配 ──
-        double perWheelTorque;
-        if (throttleLevel > 0.01) {
-            double totalWheelTorque = effectiveTorque * effectiveRatio;
-            perWheelTorque = totalWheelTorque / totalWheels;
-        } else {
-            perWheelTorque = 0.0;
-        }
+    /** 计算有效传动比 = |齿比| × 主减速比 */
+    private static double computeEffectiveRatio(int gear) {
+        double ratio = PowertrainConstants.getCurrentRatio(gear);
+        return Math.abs(ratio) * PowertrainConstants.FINAL_DRIVE_RATIO;
+    }
 
-        return new PowertrainOutput(wheelRpm, perWheelTorque);
+    /**
+     * 获取方向符号。
+     *
+     * @param gear 当前档位
+     * @return +1 前进, -1 倒车, 0 空档
+     */
+    public static double getDirectionSign(int gear) {
+        if (gear == 0) return 0;
+        return Math.signum(PowertrainConstants.getCurrentRatio(gear));
     }
 
     // ====================================================================
@@ -153,14 +154,6 @@ public final class TransmissionModel {
 
     /**
      * 换挡转速同步：按齿比比例调整发动机转速。
-     * <p>
-     * 升档时转速下降（eg. 1档 6000RPM → 2档：6000×2.5/4.0=3750 RPM），
-     * 降档时转速上升，超转时钳制到红线。
-     *
-     * @param engineRpm  换挡前发动机 RPM
-     * @param oldRatio   换挡前齿比（0 表示空/N→R/R→N 等无意义场景）
-     * @param newGear    新档位
-     * @return 同步后的发动机 RPM
      */
     private static double syncRpmOnShift(double engineRpm, double oldRatio, int newGear) {
         if (oldRatio > 0 && newGear >= 1) {

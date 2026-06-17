@@ -91,6 +91,12 @@ public final class SuspensionConstants {
     /** 无驾驶舱时的回退驱动扭矩。 */
     public static final double FALLBACK_DRIVE_TORQUE = 80.0;
 
+    // ---- 横移参数（NS 朝向轮，Q/E 控制） ----
+    /** 横移轮目标 RPM（与变速箱解耦的独立值）。 */
+    public static final double STRAFE_RPM = 150.0;
+    /** 横移轮单轮可用扭矩（Nm），横移不需要大扭矩。 */
+    public static final double STRAFE_TORQUE = 8.0;
+
     // ---- 轮胎与地面摩擦 ----
     /** 轮胎摩擦系数。最终摩擦力 = TIRE_FRICTION_COEFFICIENT × 地面摩擦系数 × 法向冲量 */
     public static final double TIRE_FRICTION_COEFFICIENT = 0.9;

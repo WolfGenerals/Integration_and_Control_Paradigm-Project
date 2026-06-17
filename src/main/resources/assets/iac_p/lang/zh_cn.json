@@ -31,8 +31,8 @@
 
   "screen.iac_p.vehicle_config.title": "§l✦ 载具综合配置 ✦",
   "screen.iac_p.vehicle_config.hint": "§7点击按键按钮后按下任意键设置 · 胎压单位为 Pa",
-  "screen.iac_p.vehicle_config.forward": "前进",
-  "screen.iac_p.vehicle_config.backward": "后退",
+  "screen.iac_p.vehicle_config.forward": "正转",
+  "screen.iac_p.vehicle_config.backward": "反转",
   "screen.iac_p.vehicle_config.left": "左转",
   "screen.iac_p.vehicle_config.right": "右转",
   "screen.iac_p.vehicle_config.brake": "刹车",
@@ -133,6 +133,8 @@
   "debug.iac_p.overlay.current_speed": "当前移速",
   "debug.iac_p.overlay.friction_demand": "摩擦需求",
 
+  "debug.iac_p.overlay.test_stand": "§7═══ §b发动机测试架 §7═══",
+
   "screen.iac_p.vehicle_orientation.title": "§l✦ 载具朝向信息 ✦",
   "screen.iac_p.vehicle_orientation.total": "悬挂总数: %d",
   "screen.iac_p.vehicle_orientation.no_suspension": "§c该载具未安装任何悬挂方块",
@@ -151,7 +153,28 @@
   "screen.iac_p.vehicle_orientation.smart_off": "§7智能映射已关闭",
   "screen.iac_p.vehicle_orientation.status_active": "✔ 智能映射已启用 — 各轮按键由系统自动分配",
   "screen.iac_p.vehicle_orientation.status_inactive": "○ 智能映射已禁用 — 使用手动配置按键",
+  "screen.iac_p.vehicle_orientation.strafe": "横移",
   "screen.iac_p.vehicle_orientation.close": "关闭",
 
-  "message.iac_p.smart_map_reversed": "§e方向盘已反转（W↔S · A↔D）"
+  "message.iac_p.smart_map_reversed": "§e方向盘已反转（W↔S · A↔D）",
+
+  "screen.iac_p.structure_info.title": "§l✦ 结构概览 ✦",
+  "screen.iac_p.structure_info.no_cockpit": "⚠ 该物理结构中未检测到驾驶舱",
+  "screen.iac_p.structure_info.block_header": "── 方块统计 ──",
+  "screen.iac_p.structure_info.block_summary": "种类: %d  |  总数: %d",
+  "screen.iac_p.structure_info.more": "…及其他 %d 种",
+  "screen.iac_p.structure_info.weapon_header": "── 武器系统 ──",
+  "screen.iac_p.structure_info.no_weapons": "未检测到武器系统",
+  "screen.iac_p.structure_info.turret_count": "炮塔底座: %d  (已装配: %d)",
+  "screen.iac_p.structure_info.turret_entry": "炮塔 #%d @ %s",
+  "screen.iac_p.structure_info.status_label": "状态:",
+  "screen.iac_p.structure_info.connection_header": "── 连接结构 ──",
+  "screen.iac_p.structure_info.connection_turret": "▶ 炮塔 @ %s",
+  "screen.iac_p.structure_info.conn_vehicle": "车体 SubLevel: %s",
+  "screen.iac_p.structure_info.conn_mainworld": "主世界（无车体连接）",
+  "screen.iac_p.structure_info.conn_grindstone": "砂轮 SubLevel: %s",
+  "screen.iac_p.structure_info.conn_rod": "避雷针 SubLevel: %s",
+  "screen.iac_p.structure_info.no_connections": "无已装配的炮塔连接",
+  "screen.iac_p.structure_info.hint": "§7按 ESC 或点击关闭退出 · 数据为只读",
+  "screen.iac_p.structure_info.close": "关闭"
 }
