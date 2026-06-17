@@ -1,8 +1,13 @@
 package com.hainabaichuan75.iac_p.network.packets;
 
 import com.hainabaichuan75.iac_p.IACP;
+import com.hainabaichuan75.iac_p.content.blocks.cockpit.CockpitBlock;
+import com.hainabaichuan75.iac_p.content.blocks.cockpit.CockpitBlockEntity;
 import com.hainabaichuan75.iac_p.content.blocks.suspension_test.SuspensionTestBlockEntity;
 import com.hainabaichuan75.iac_p.events.PlayerMountTracker;
+import com.hainabaichuan75.iac_p.events.SubLevelScanner;
+import dev.ryanhcode.sable.api.sublevel.SubLevelContainer;
+import dev.ryanhcode.sable.sublevel.SubLevel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
@@ -14,6 +19,7 @@ import net.neoforged.neoforge.network.handling.IPayloadContext;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * 载具实时控制输入数据包（客户端 → 服务器）。
@@ -33,13 +39,21 @@ public class VehicleControlC2SPacket implements CustomPacketPayload {
 
     private final List<Entry> entries;
 
+    /**
+     * 原始油门方向：+1=踩油门(W), -1=松油门(S), 0=无输入。
+     * 与悬挂解耦的直接控制信号，不经过智能键映射。
+     */
+    private final int throttleDirection;
+
     public record Entry(BlockPos blockPos, boolean forward, boolean backward, boolean left, boolean right, boolean brake) {}
 
-    public VehicleControlC2SPacket(List<Entry> entries) {
+    public VehicleControlC2SPacket(List<Entry> entries, int throttleDirection) {
         this.entries = entries;
+        this.throttleDirection = throttleDirection;
     }
 
     public List<Entry> entries() { return entries; }
+    public int throttleDirection() { return throttleDirection; }
 
     public static final StreamCodec<RegistryFriendlyByteBuf, VehicleControlC2SPacket> STREAM_CODEC =
             new StreamCodec<>() {
@@ -57,7 +71,8 @@ public class VehicleControlC2SPacket implements CustomPacketPayload {
                                 buf.readBoolean()
                         ));
                     }
-                    return new VehicleControlC2SPacket(entries);
+                    int throttleDir = buf.readVarInt();
+                    return new VehicleControlC2SPacket(entries, throttleDir);
                 }
 
                 @Override
@@ -71,6 +86,7 @@ public class VehicleControlC2SPacket implements CustomPacketPayload {
                         buf.writeBoolean(e.right);
                         buf.writeBoolean(e.brake);
                     }
+                    buf.writeVarInt(packet.throttleDirection);
                 }
             };
 
@@ -100,7 +116,41 @@ public class VehicleControlC2SPacket implements CustomPacketPayload {
                         );
                     }
                 }
+
+                // ── 油门方向直接发送到驾驶舱（与悬挂解耦） ──
+                // W/S 直接控制抽象发动机油门，不经过悬挂方的智能键映射。
+                var mountData = PlayerMountTracker.getMountData(serverPlayer);
+                if (mountData != null) {
+                    CockpitBlockEntity cockpit = findCockpitInSubLevel(level, mountData.subLevelUUID());
+                    if (cockpit != null) {
+                        cockpit.setRawThrottleDirection(packet.throttleDirection);
+                    }
+                }
             }
         });
+    }
+
+    // ====================================================================
+    //  工具：在 SubLevel 内找驾驶舱
+    // ====================================================================
+
+    /**
+     * 在指定 SubLevel 中查找驾驶舱 BlockEntity。
+     * 使用 SubLevelScanner 统一遍历，与 SmartMapC2SPacket 中的实现保持一致。
+     */
+    private static CockpitBlockEntity findCockpitInSubLevel(ServerLevel level, UUID subLevelUUID) {
+        var container = SubLevelContainer.getContainer(level);
+        if (container == null) return null;
+        SubLevel subLevel = container.getSubLevel(subLevelUUID);
+        if (subLevel == null) return null;
+
+        CockpitBlockEntity[] result = {null};
+        SubLevelScanner.forEachBlock(subLevel, level, (worldPos, state, be) -> {
+            if (result[0] != null) return;
+            if (state.getBlock() instanceof CockpitBlock && be instanceof CockpitBlockEntity cockpit) {
+                result[0] = cockpit;
+            }
+        });
+        return result[0];
     }
 }

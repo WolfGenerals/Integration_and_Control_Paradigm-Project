@@ -5,8 +5,8 @@ import com.hainabaichuan75.iac_p.content.blocks.cockpit.CockpitBlock;
 import com.hainabaichuan75.iac_p.content.blocks.cockpit.CockpitBlockEntity;
 import com.hainabaichuan75.iac_p.content.blocks.suspension_test.SuspensionTestBlock;
 import com.hainabaichuan75.iac_p.content.blocks.suspension_test.SuspensionTestBlockEntity;
-import com.hainabaichuan75.iac_p.events.PlayerMountTracker;
-import dev.ryanhcode.sable.Sable;
+import com.hainabaichuan75.iac_p.skill.DrivingSkill;
+import com.hainabaichuan75.iac_p.skill.SkillRegistry;
 import dev.ryanhcode.sable.api.sublevel.SubLevelContainer;
 import dev.ryanhcode.sable.companion.math.BoundingBox3ic;
 import dev.ryanhcode.sable.companion.math.BoundingBox3i;
@@ -23,7 +23,6 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.neoforged.neoforge.network.handling.IPayloadContext;
 
 import java.util.ArrayList;
@@ -33,8 +32,15 @@ import java.util.UUID;
 /**
  * 智能映射数据包（客户端 → 服务器）。
  * <p>
- * 玩家在朝向信息界面中点击「汽车模式」「反转方向」「开关」等按钮时发送，
+ * 玩家在朝向信息界面中点击「汽车模式」「选择技能」「反转方向」「开关」等按钮时发送，
  * 服务端执行对应的智能按键分配逻辑。
+ * <p>
+ * 数据包格式：
+ * <ul>
+ *   <li>Action 枚举（1 byte）</li>
+ *   <li>SubLevel UUID（16 bytes）</li>
+ *   <li>字符串 payload（仅 SELECT_SKILL 使用，其余动作传空字符串）</li>
+ * </ul>
  */
 public class SmartMapC2SPacket implements CustomPacketPayload {
 
@@ -44,21 +50,29 @@ public class SmartMapC2SPacket implements CustomPacketPayload {
     public static final Type<SmartMapC2SPacket> TYPE = new Type<>(ID);
 
     public enum Action {
-        CAR_MODE,   // 应用汽车模式智能映射
-        REVERSE,    // 反转方向盘（W↔S, A↔D）
-        TOGGLE_SMART // 开关智能映射
+        CAR_MODE,       // 应用汽车模式（旧版兼容）
+        REVERSE,        // 反转方向盘（W↔S, A↔D）
+        TOGGLE_SMART,   // 开关智能映射
+        SELECT_SKILL    // 选择驾驶技能（payload=技能ID）
     }
 
     private final Action action;
     private final UUID subLevelUUID;
+    private final String payload; // SELECT_SKILL 时 = 技能 ID，其余空
 
     public SmartMapC2SPacket(Action action, UUID subLevelUUID) {
+        this(action, subLevelUUID, "");
+    }
+
+    public SmartMapC2SPacket(Action action, UUID subLevelUUID, String payload) {
         this.action = action;
         this.subLevelUUID = subLevelUUID;
+        this.payload = payload != null ? payload : "";
     }
 
     public Action action() { return action; }
     public UUID subLevelUUID() { return subLevelUUID; }
+    public String payload() { return payload; }
 
     public static final StreamCodec<RegistryFriendlyByteBuf, SmartMapC2SPacket> STREAM_CODEC =
             new StreamCodec<>() {
@@ -66,7 +80,8 @@ public class SmartMapC2SPacket implements CustomPacketPayload {
                 public SmartMapC2SPacket decode(RegistryFriendlyByteBuf buf) {
                     return new SmartMapC2SPacket(
                             buf.readEnum(Action.class),
-                            buf.readUUID()
+                            buf.readUUID(),
+                            buf.readUtf(256)
                     );
                 }
 
@@ -74,6 +89,7 @@ public class SmartMapC2SPacket implements CustomPacketPayload {
                 public void encode(RegistryFriendlyByteBuf buf, SmartMapC2SPacket packet) {
                     buf.writeEnum(packet.action);
                     buf.writeUUID(packet.subLevelUUID);
+                    buf.writeUtf(packet.payload, 256);
                 }
             };
 
@@ -102,35 +118,97 @@ public class SmartMapC2SPacket implements CustomPacketPayload {
             if (cockpit == null) return;
 
             switch (packet.action) {
-                case CAR_MODE -> applyCarMode(subLevel, level, cockpit);
+                case CAR_MODE -> {
+                    // 旧版兼容：选择默认技能
+                    applySkill(subLevel, level, cockpit, SkillRegistry.DEFAULT_SKILL_ID);
+                }
                 case REVERSE -> applyReverse(subLevel, level, cockpit);
                 case TOGGLE_SMART -> toggleSmartMapping(subLevel, level, cockpit);
+                case SELECT_SKILL -> {
+                    String skillId = packet.payload;
+                    if (skillId.isEmpty()) {
+                        IACP.LOGGER.warn("[SmartMap] SELECT_SKILL 收到空技能 ID");
+                        return;
+                    }
+                    applySkill(subLevel, level, cockpit, skillId);
+                }
             }
         });
     }
 
     // ====================================================================
-    //  CAR_MODE：汽车模式智能映射
+    //  技能应用（替代旧的 applyCarMode）
     // ====================================================================
 
     /**
-     * 汽车模式：根据悬挂朝向和轮位分配智能按键。
-     * <ol>
-     *   <li>统计东西/南北 FACING 数量，确定宽度轴</li>
-     *   <li>计算所有悬挂方块的重心（平均坐标）</li>
-     *   <li>东西朝向的轮子：前进=W，后退=S</li>
-     *   <li>重心以南的轮子：左转=A，右转=D</li>
-     *   <li>重心以北的轮子：左转=D，右转=A</li>
-     * </ol>
+     * 应用指定技能：根据技能的 wheel_classification 和 wheel_outputs
+     * 为每个悬挂方块设置 smartKey 绑定。
      */
-    private static void applyCarMode(SubLevel subLevel, ServerLevel level, CockpitBlockEntity cockpit) {
-        LevelPlot plot = subLevel.getPlot();
-        if (plot == null) return;
+    private static void applySkill(SubLevel subLevel, ServerLevel level, CockpitBlockEntity cockpit, String skillId) {
+        DrivingSkill skill = SkillRegistry.getInstance().get(skillId);
+        if (skill == null) {
+            IACP.LOGGER.error("[SmartMap] 技能 '{}' 不存在", skillId);
+            return;
+        }
 
-        // ── 第1轮：收集所有悬挂方块的位置和朝向 ──
-        record WheelData(BlockPos pos, boolean facingEastWest, double posZ) {}
-        List<WheelData> wheels = new ArrayList<>();
-        double sumZ = 0;
+        // ── 第1步：收集所有悬挂方块的位置和朝向 ──
+        List<DrivingSkill.WheelEntry> allWheels = collectWheels(subLevel, level);
+        if (allWheels.isEmpty()) {
+            IACP.LOGGER.warn("[SmartMap] 未找到悬挂方块");
+            return;
+        }
+
+        // ── 第2步：分类 ──
+        List<DrivingSkill.WheelGroup> groups = skill.classify(allWheels);
+
+        // ── 第3步：对每个组，计算重心 ──
+        for (var group : groups) {
+            double centroid = computeCentroid(group, skill.classification().isFacingAxis());
+
+            // ── 第4步：对组内每个悬挂，评估表达式并设置 smartKey ──
+            for (var entry : group.wheels()) {
+                BlockPos pos = BlockPos.containing(entry.posX(), entry.posY(), entry.posZ());
+                BlockEntity be = level.getBlockEntity(pos);
+                if (!(be instanceof SuspensionTestBlockEntity sbe)) continue;
+
+                var outputs = skill.evaluateOutputs(group.groupName(), entry, centroid);
+
+                // 应用输出：解析直接键映射
+                String smartFwd = resolveToKey(skill, outputs.get("forward"));
+                String smartBwd = resolveToKey(skill, outputs.get("backward"));
+                String smartLeft = resolveToKey(skill, outputs.get("left"));
+                String smartRight = resolveToKey(skill, outputs.get("right"));
+                String smartBrake = resolveToKey(skill, outputs.get("brake"));
+
+                sbe.setSmartKeyBindings(smartFwd, smartBwd, smartLeft, smartRight, smartBrake);
+
+                // 根据分组名称设置 strafe wheel
+                boolean isStrafe = "secondary".equals(group.groupName())
+                        || "ns".equalsIgnoreCase(group.groupName());
+                sbe.setStrafeWheel(isStrafe);
+
+                IACP.LOGGER.debug("[SmartMap]   {} @ ({},{}): fwd={} bwd={} left={} right={} brake={} strafe={}",
+                        entry.facing(), (int)entry.posX(), (int)entry.posZ(),
+                        smartFwd, smartBwd, smartLeft, smartRight, smartBrake, isStrafe);
+            }
+        }
+
+        // ── 第5步：保存技能 ID 到驾驶舱 ──
+        cockpit.setActiveSkillId(skillId);
+        cockpit.setSmartMappingActive(true);
+
+        IACP.LOGGER.info("[SmartMap] 技能 '{}' 已应用到 SubLevel {} ({} 个悬挂, {} 组)",
+                skillId, subLevel.getUniqueId(), allWheels.size(), groups.size());
+    }
+
+    /**
+     * 收集 SubLevel 中所有悬挂方块的信息。
+     */
+    private static List<DrivingSkill.WheelEntry> collectWheels(SubLevel subLevel, ServerLevel level) {
+        LevelPlot plot = subLevel.getPlot();
+        if (plot == null) return List.of();
+
+        List<DrivingSkill.WheelEntry> wheels = new ArrayList<>();
 
         for (PlotChunkHolder chunk : plot.getLoadedChunks()) {
             BoundingBox3ic localBounds = chunk.getBoundingBox();
@@ -148,50 +226,47 @@ public class SmartMapC2SPacket implements CustomPacketPayload {
 
                         Direction facing = state.getValue(SuspensionTestBlock.HORIZONTAL_FACING);
                         boolean isEW = facing.getAxis() == Direction.Axis.X;
-                        wheels.add(new WheelData(worldPos, isEW, worldPos.getZ()));
-                        sumZ += worldPos.getZ();
+                        wheels.add(new DrivingSkill.WheelEntry(
+                                worldPos.getX(), worldPos.getY(), worldPos.getZ(),
+                                facing.getName().toUpperCase(),
+                                isEW,
+                                facing.getStepX(), facing.getStepZ()
+                        ));
                     }
                 }
             }
         }
+        return wheels;
+    }
 
-        if (wheels.isEmpty()) return;
-
-        // ── 重心 Z 坐标（用于区分南北） ──
-        double centroidZ = sumZ / wheels.size();
-
-        // ── 第2轮：为每个方块设置智能按键 ──
-        for (WheelData wd : wheels) {
-            BlockEntity be = level.getBlockEntity(wd.pos);
-            if (!(be instanceof SuspensionTestBlockEntity sbe)) continue;
-
-            String fwd = "key.keyboard.w";
-            String bwd = "key.keyboard.s";
-            String left, right;
-
-            // 南北半区决定左右转向键
-            if (wd.posZ < centroidZ) {
-                // 北侧：左转=D，右转=A（镜像）
-                left = "key.keyboard.d";
-                right = "key.keyboard.a";
-            } else {
-                // 南侧：左转=A，右转=D（正常）
-                left = "key.keyboard.a";
-                right = "key.keyboard.d";
-            }
-
-            sbe.setSmartKeyBindings(fwd, bwd, left, right, sbe.getActiveKeyBrake());
+    /**
+     * 计算分组重心。
+     */
+    private static double computeCentroid(DrivingSkill.WheelGroup group, boolean facingAxis) {
+        if (group.wheels().isEmpty()) return 0;
+        double sum = 0;
+        // facing_axis 用 facing 方向的重心，side 用空间平均
+        for (var w : group.wheels()) {
+            sum += w.isEW() ? w.posZ() : w.posX();
         }
+        return sum / group.wheels().size();
+    }
 
-        // 标记智能映射已启用，重置反转状态
-        cockpit.setSmartMappingActive(true);
-        cockpit.setSmartMappingReversed(false);
-        IACP.LOGGER.info("[SmartMap] CAR_MODE applied to SubLevel {} (centroidZ={}, wheels={})",
-                subLevel.getUniqueId(), centroidZ, wheels.size());
+    /**
+     * 将输出解析为物理键名或表达式原文。
+     * 如果是直接键映射（input.XXX → 已解析为键名），直接返回。
+     * 如果是复杂表达式，返回表达式原文（暂不支持运行时求值）。
+     */
+    private static String resolveToKey(DrivingSkill skill, String resolved) {
+        if (resolved == null || resolved.isEmpty()) return "";
+        // 如果已经是键名格式（key.keyboard.xxx），直接使用
+        if (resolved.startsWith("key.")) return resolved;
+        // 否则返回空（复杂表达式需要运行时求值，暂不支持）
+        return "";
     }
 
     // ====================================================================
-    //  REVERSE：反转方向盘
+    //  REVERSE：反转方向盘（保持不变）
     // ====================================================================
 
     /**
@@ -224,14 +299,13 @@ public class SmartMapC2SPacket implements CustomPacketPayload {
                         String oldLeft = sbe.getSmartKeyLeft();
                         String oldRight = sbe.getSmartKeyRight();
 
-                        // 仅当有智能映射键时才反转
                         if (oldFwd.isEmpty() && oldBwd.isEmpty()
                                 && oldLeft.isEmpty() && oldRight.isEmpty()) continue;
 
                         sbe.setSmartKeyBindings(
-                                swapWASD(oldBwd, oldFwd), // W↔S
+                                swapWASD(oldBwd, oldFwd),
                                 swapWASD(oldFwd, oldBwd),
-                                swapWASD(oldRight, oldLeft), // A↔D
+                                swapWASD(oldRight, oldLeft),
                                 swapWASD(oldLeft, oldRight),
                                 sbe.getActiveKeyBrake()
                         );
@@ -239,12 +313,9 @@ public class SmartMapC2SPacket implements CustomPacketPayload {
                 }
             }
         }
-        // 切换引擎层方向反转（再点一次恢复）
-        cockpit.setSmartMappingReversed(!cockpit.isSmartMappingReversed());
         IACP.LOGGER.info("[SmartMap] REVERSE applied");
     }
 
-    /** 辅助：取两个字符串的非空值（若两个都非空则取 preferred） */
     private static String swapWASD(String a, String b) {
         return a.isEmpty() ? b : a;
     }
@@ -255,10 +326,7 @@ public class SmartMapC2SPacket implements CustomPacketPayload {
 
     /**
      * 切换智能映射启用/禁用。
-     * <ul>
-     *   <li>启用：重新应用 CAR_MODE（若尚未应用则直接调用）</li>
-     *   <li>禁用：清除所有方块的 smartKey，回退到手动配置</li>
-     * </ul>
+     * 启用时重新应用当前技能；禁用时清除所有 smartKey。
      */
     private static void toggleSmartMapping(SubLevel subLevel, ServerLevel level, CockpitBlockEntity cockpit) {
         boolean wasActive = cockpit.isSmartMappingActive();
@@ -281,6 +349,7 @@ public class SmartMapC2SPacket implements CustomPacketPayload {
                                 if (!(st.getBlock() instanceof SuspensionTestBlock)) continue;
                                 if (level.getBlockEntity(wp) instanceof SuspensionTestBlockEntity sbe) {
                                     sbe.resetSmartKeys();
+                                    sbe.setStrafeWheel(false);
                                 }
                             }
                         }
@@ -288,17 +357,20 @@ public class SmartMapC2SPacket implements CustomPacketPayload {
                 }
             }
             cockpit.setSmartMappingActive(false);
-            cockpit.setSmartMappingReversed(false);
             IACP.LOGGER.info("[SmartMap] TOGGLE OFF: smart keys cleared");
         } else {
-            // 开启：应用汽车模式（applyCarMode 会自动重置 reversed=false）
-            applyCarMode(subLevel, level, cockpit);
-            IACP.LOGGER.info("[SmartMap] TOGGLE ON: car mode applied");
+            // 开启：重新应用当前技能
+            String skillId = cockpit.getActiveSkillId();
+            if (skillId == null || skillId.isEmpty()) {
+                skillId = SkillRegistry.DEFAULT_SKILL_ID;
+            }
+            applySkill(subLevel, level, cockpit, skillId);
+            IACP.LOGGER.info("[SmartMap] TOGGLE ON: skill '{}' applied", skillId);
         }
     }
 
     // ====================================================================
-    //  工具：在 SubLevel 内找驾驶舱
+    //  工具：在 SubLevel 内查找方块
     // ====================================================================
 
     private static CockpitBlockEntity findCockpitInSubLevel(SubLevel subLevel, ServerLevel level) {
@@ -329,4 +401,5 @@ public class SmartMapC2SPacket implements CustomPacketPayload {
         }
         return null;
     }
+
 }

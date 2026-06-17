@@ -152,6 +152,26 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
      */
     private double rollingResistanceMag = 0.0;
 
+    // ===== Binary Grip 抓地状态 =====
+    /** 当前轮是否抓地（true=抓地, false=打滑）。由 Binary Grip 每 tick 更新。 */
+    private boolean gripStatus = true;
+
+    // ===== 横移轮标记（NS 朝向，Q/E 控制） =====
+    /**
+     * 是否为横移轮（NS 朝向，由 Car Mode 智能映射分配 Q/E 控制）。
+     * 横移轮不走变速箱，直接在 physicsTick 中用 Q/E 的 throttle 状态驱动 RPM。
+     * NBT 持久化，重进世界后自动恢复。
+     */
+    private boolean isStrafeWheel = false;
+
+    // ===== 扭矩消耗上报（供驾驶舱负载反射） =====
+    /**
+     * 本轮物理 tick 中消耗的轮端扭矩（Nm）。
+     * = |P控制器实际力| × 轮半径
+     * 由 CockpitBE 扫描，用于计算负载反射和净扭矩。
+     */
+    private double consumedWheelTorque = 0.0;
+
     // ===== 缓存优化：避免每物理 tick 全量 SubLevel 扫描 =====
     /**
      * 缓存的驾驶舱引用。null = 需要首次扫描刷新。 驾驶过程中 SubLevel 构成不变，缓存后无需定期失效。
@@ -225,13 +245,12 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
     }
 
     /**
-     * 总水平力需求 / 摩擦预算 比率。
+     * 抓地力需求比（Binary Grip）。
      * <ul>
-     * <li>&lt; 1.0 = 有抓地余量</li>
-     * <li>= 1.0 = 摩擦圆刚好饱和</li>
-     * <li>&gt; 1.0 = 力需求超过抓地极限 → 轮子空转/打滑</li>
+     * <li>0.5 = 抓地（驱动力 < 抓地极限，有余量）</li>
+     * <li>2.0 = 打滑（驱动力 > 抓地极限）</li>
      * </ul>
-     * 通过 NBT 同步到客户端，用于调试覆盖层显示动力盈余。
+     * 通过 NBT 同步到客户端，用于调试覆盖层显示。
      */
     private double frictionDemandRatio = 0.0;
     /**
@@ -302,6 +321,14 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
     }
 
     /**
+     * @return 本轮消耗的轮端扭矩（Nm），供驾驶舱负载反射计算。
+     *          = |P控制器实际力| × 轮半径
+     */
+    public double getConsumedWheelTorque() {
+        return consumedWheelTorque;
+    }
+
+    /**
      * @return 本轮当前实际轮端 RPM（由物理速度推算），供发动机-轮速耦合
      */
     public double getCurrentWheelRpm() {
@@ -309,10 +336,17 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
     }
 
     /**
-     * @return 总水平力需求 / 摩擦预算比率（可超过 1.0，表示打滑程度）
+     * @return 总水平力需求 / 摩擦预算比率（Binary Grip: 0.5=抓地, 2.0=打滑）
      */
     public double getFrictionDemandRatio() {
         return frictionDemandRatio;
+    }
+
+    /**
+     * @return 当前轮是否抓地（true=抓地, false=打滑）
+     */
+    public boolean isGripping() {
+        return gripStatus;
     }
 
     /**
@@ -443,6 +477,24 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
     }
 
     /**
+     * @return 是否为横移轮（NS 朝向，Q/E 控制）。
+     *         横移轮在 physicsTick 中不走变速箱，直接用 Q/E 的 throttle 状态驱动 RPM。
+     */
+    public boolean isStrafeWheel() {
+        return isStrafeWheel;
+    }
+
+    /**
+     * 设置横移轮标记（由 SmartMapC2SPacket.applyCarMode 分配 NS 轮时调用）。
+     * 保存后标记脏数据并同步到客户端。
+     */
+    public void setStrafeWheel(boolean strafe) {
+        this.isStrafeWheel = strafe;
+        setChanged();
+        sendData();
+    }
+
+    /**
      * 批量设置智能映射按键（由 WASD 智能映射系统调用）。 设置后对应方块将使用 smartKey 而非手动 key。
      */
     public void setSmartKeyBindings(String forward, String backward, String left, String right, String brake) {
@@ -557,6 +609,9 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
     private static final String TAG_SMART_KEY_RIGHT = "SmartKeyRight";
     private static final String TAG_SMART_KEY_BRAKE = "SmartKeyBrake";
 
+    // 横移轮标记 NBT 标签
+    private static final String TAG_IS_STRAFE_WHEEL = "IsStrafeWheel";
+
     // 轮胎参数 NBT 标签（仅保留胎压，其余由轮胎款式决定）
     private static final String TAG_NOMINAL_PRESSURE = "NominalPressure";
     private static final String TAG_FRICTION_DEMAND_RATIO = "FrictionDemandRatio";
@@ -577,6 +632,8 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
         t.putString(TAG_SMART_KEY_LEFT, this.smartKeyLeft);
         t.putString(TAG_SMART_KEY_RIGHT, this.smartKeyRight);
         t.putString(TAG_SMART_KEY_BRAKE, this.smartKeyBrake);
+        // 持久化横移轮标记
+        t.putBoolean(TAG_IS_STRAFE_WHEEL, this.isStrafeWheel);
         // 持久化胎压（玩家唯一可调的运行时参数）
         t.putDouble(TAG_NOMINAL_PRESSURE, this.nominalPressure);
         t.putDouble(TAG_FRICTION_DEMAND_RATIO, this.frictionDemandRatio);
@@ -603,6 +660,10 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
         }
         if (t.contains(TAG_KEY_BRAKE)) {
             this.keyBrake = t.getString(TAG_KEY_BRAKE);
+        }
+        // 恢复横移轮标记（兼容旧档——无此标签时 false）
+        if (t.contains(TAG_IS_STRAFE_WHEEL)) {
+            this.isStrafeWheel = t.getBoolean(TAG_IS_STRAFE_WHEEL);
         }
         // 恢复智能映射按键（兼容旧档——无此标签时保持空字符串）
         if (t.contains(TAG_SMART_KEY_FORWARD)) {
@@ -770,50 +831,14 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
             //    右转 (yawRate<0) → 稳态 accelX<0 → 离心力向左(负X)
             //      → 左轮增载、右轮减载 ✅
             //
-            double loadTransfer = 0.0;
-            if (this.hasPrevVelocity) {
-                // 首先计算前进速度（用于稳态离心加速度）
-                double fwdSpeed = lv.dot(fwdD);
-
-                // 瞬态加速度分量（来自速度变化）
-                double accelZ = (lv.z() - this.prevLocalVelocity.z()) / dt; // 纵向 (+前进)
-                double accelX = (lv.x() - this.prevLocalVelocity.x()) / dt; // 侧向瞬态 (+右)
-
-                // 稳态离心加速度分量（来自偏航率）
-                // 定圆转弯时瞬态分量≈0，但离心力持续存在
-                Vector3d angVel = handle.getAngularVelocity(new Vector3d());
-                double yawRate = angVel.y(); // rad/s, 正=左转(CCW)
-                double steadyLatAccel = fwdSpeed * yawRate; // v × ω
-                accelX += steadyLatAccel;
-
-                // 使用 physicsTick 顶部预计算的轮位（localPosX/Z, preCockpit）
-                if (preCockpit != null) {
-                    // 归一化到 [-1, 1]
-                    double normZ = Mth.clamp(localPosZ / HALF_WHEELBASE, -1.0, 1.0);
-                    double normX = Mth.clamp(localPosX / HALF_TRACK, -1.0, 1.0);
-
-                    // 载荷转移增量（占静载比例）
-                    // 纵向：加速 → 前轮减载(负) 后轮增载(正)
-                    //       公式：-accelZ × CoG_h / (g × halfWb) × normZ
-                    //       前轮 normZ>0 → 负调整，后轮 normZ<0 → 正调整 ✓
-                    // 侧向：左转(yawRate>0, steadyLatAccel>0) → 离心力向右(正X)
-                    //       公式：+accelX × CoG_h / (g × halfTrack) × normX
-                    //       右轮 normX>0 → 正调整(增载) ✓
-                    //       左轮 normX<0 → 负调整(减载) ✓
-                    double g = 9.81;
-                    double longTransfer = -accelZ * COG_HEIGHT / (g * HALF_WHEELBASE) * normZ;
-                    double latTransfer = +accelX * COG_HEIGHT / (g * HALF_TRACK) * normX;
-
-                    loadTransfer = (longTransfer + latTransfer) * LOAD_TRANSFER_SENSITIVITY;
-                    loadTransfer = Mth.clamp(loadTransfer, -0.8, 0.8);
-                }
-            }
-            // 保存本次速度供下一 tick 使用
+            // ╔══════════════════════════════════════════════════════════════╗
+            // ║  [暂禁用] 载荷转移 — 所有轮子使用弹簧静载作为法向冲量    ║
+            // ╚══════════════════════════════════════════════════════════════╝
+            // double loadTransfer = 0.0;
+            // if (this.hasPrevVelocity) { ... complex calculation ... }
             this.prevLocalVelocity.set(lv.x(), lv.y(), lv.z());
             this.hasPrevVelocity = true;
-
-            // 应用载荷转移：抓地力 = 弹簧静载 ± 惯性载荷系数
-            double adjustedSpringImpulse = springImpulse * (1.0 + loadTransfer);
+            double adjustedSpringImpulse = springImpulse; // 无载荷转移
 
             // 最小摩擦基数：确保轻质载具即使弹簧压缩极小也有足够抓地力
             // min = nm × dt × 20 ≈ 2 × nm × g × dt（约 2 倍重量冲量）
@@ -872,34 +897,51 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
                 //     若 SubLevel 内无驾驶舱（降级兼容），使用固定回退值
                 double targetRpm;
                 double torqueGain;
-                if (preCockpit != null) {
-                    // 统计 SubLevel 内悬挂方块总数（用于扭矩均摊）
-                    int totalWheels = countSuspensionBlocksInSubLevel(sl);
-                    var output = preCockpit.getWheelOutput(totalWheels);
-                    targetRpm = output.wheelRpm();
-                    torqueGain = output.wheelTorque();
+                if (this.isStrafeWheel) {
+                    // ╔══════════════════════════════════════════════════════════════╗
+                    // ║  [暂禁用] 横移轮独立路径 — 暂不驱动                    ║
+                    // ╚══════════════════════════════════════════════════════════════╝
+                    targetRpm = 0;
+                    torqueGain = 0;
+                } else if (preCockpit != null) {
+                    // ═══ Binary Grip 直驱模式 ═══
+                    // 变速箱扭矩 → 二进制抓地力判定 → 驱动冲量
+                    // 抓得住就全量传递，抓不住只传极限值，多余扭矩浪费（打滑）。
+                    double wheelTorque = preCockpit.getTorquePerWheel();
+                    double driveForceN = wheelTorque / Math.max(rad, 0.01);
+                    double driveImpulse = driveForceN * com.hainabaichuan75.iac_p.content.blocks.cockpit.PowertrainConstants.DT;
 
-                    // ═══ 差速器：转弯时内外轮允许转速差 ═══
-                    // 开放式差速器模拟：锁止差速器强制内外轮同转速，
-                    // 转向时轮胎被地面拖拽产生额外阻力。
-                    // 这里按轮位和转向角微调目标 RPM：
-                    //   左转(chasingYaw>0) → 左轮(内侧)减速，右轮(外侧)加速
-                    //   右转(chasingYaw<0) → 右轮(内侧)减速，左轮(外侧)加速
-                    //   偏移量 = chasingYaw × (localPosX/HALF_TRACK) × DIFF_RATIO
-                    double normX = Mth.clamp(localPosX / HALF_TRACK, -1.0, 1.0);
-                    double diffOffset = this.chasingYaw * normX * DIFFERENTIAL_RATIO;
-                    diffOffset = Mth.clamp(diffOffset, -0.3, 0.3);
-                    targetRpm *= (1.0 + diffOffset);
+                    // 最大抓地冲量 = μ × 法向冲量
+                    double maxGripImpulse = mu * frictionBasis;
+
+                    // Binary Grip: 驱动力 ≤ 抓地极限 → 全量通过，否则截断
+                    this.gripStatus = driveImpulse <= maxGripImpulse;
+                    double actualImpulse = this.gripStatus ? driveImpulse : maxGripImpulse;
+
+                    // 摩擦需求比 = 驱动冲量 / 抓地极限 - 1.0
+                    //   < 0 → 有余量, = 0 → 刚好饱和, > 0 → 打滑
+                    this.frictionDemandRatio = maxGripImpulse > 1e-10
+                            ? driveImpulse / maxGripImpulse - 1.0
+                            : -1.0;
+
+                    // ╔══════════════════════════════════════════════════════════════╗
+                    // ║  [暂禁用] 差速器偏置 — 所有轮子均分扭矩b                ║
+                    // ╚══════════════════════════════════════════════════════════════╝
+                    // double normX = Mth.clamp(localPosX / HALF_TRACK, -1.0, 1.0);
+                    // double diffFactor = 1.0 + this.chasingYaw * normX * DIFFERENTIAL_RATIO;
+                    // diffFactor = Mth.clamp(diffFactor, 0.5, 1.5);
+                    double diffFactor = 1.0; // 无差速偏置，所有轮子均分扭矩
+                    longForce += actualImpulse * diffFactor;
+                    this.pControllerDemand = 0;
+                    // 标记已处理，跳过下方 P 控制器
+                    targetRpm = 0;
+                    torqueGain = 0;
                 } else {
-                    // 降级兼容：无驾驶舱时使用固定值
-                    if (this.throttleForward) {
-                        targetRpm = FALLBACK_DRIVE_RPM;
-                    } else if (this.throttleBackward) {
-                        targetRpm = -FALLBACK_DRIVE_RPM;
-                    } else {
-                        targetRpm = 0.0;
-                    }
-                    torqueGain = FALLBACK_DRIVE_TORQUE;
+                    // ╔══════════════════════════════════════════════════════════════╗
+                    // ║  [暂禁用] 降级回退路径 — 无驾驶舱时暂不驱动              ║
+                    // ╚══════════════════════════════════════════════════════════════╝
+                    targetRpm = 0;
+                    torqueGain = 0;
                 }
 
                 // 4b. 主动驱动：P 控制器追踪目标车速 v = ω × r
@@ -944,49 +986,41 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
                 longForce += rrResult.rrForce();
                 this.rollingResistanceMag = Math.abs(rrResult.rrForce());
 
-                // 4d. 二次方速度阻尼（委托 TirePhysicsCalculator）
-                double dragImpulse = TirePhysicsCalculator.calculateDragImpulse(
-                        forwardSpeed, DRAG_COEFFICIENT, dt);
-                longForce += dragImpulse;
+                // ╔══════════════════════════════════════════════════════════════╗
+                // ║  [暂禁用] 空气阻力 — 扭矩曲线 × 齿比已天然限速          ║
+                // ╚══════════════════════════════════════════════════════════════╝
+                // double dragImpulse = TirePhysicsCalculator.calculateDragImpulse(
+                //         forwardSpeed, DRAG_COEFFICIENT, dt);
+                // longForce += dragImpulse;
 
-                // 5. 侧向力（Brush 轮胎侧偏模型 —— 委托 BrushTireModel）
-                var brushResult = BrushTireModel.calculateLateralForce(
-                        forwardSpeed, lateralSpeed,
-                        frictionBasis, mu,
-                        CORNERING_STIFFNESS, SIDE_SLIP_DAMPING,
-                        nm, dt);
-                latForce = brushResult.lateralImpulse();
+                // ╔══════════════════════════════════════════════════════════════╗
+                // ║  [暂禁用] Brush 侧偏模型 — 摩擦圆已禁用，侧偏力无限制施加 ║
+                // ║  侧偏力暂归零，未来由智能映射系统处理横向力分配             ║
+                // ╚══════════════════════════════════════════════════════════════╝
+                // var brushResult = BrushTireModel.calculateLateralForce(
+                //         forwardSpeed, lateralSpeed,
+                //         frictionBasis, mu,
+                //         CORNERING_STIFFNESS, SIDE_SLIP_DAMPING,
+                //         nm, dt);
+                // latForce = brushResult.lateralImpulse();
+                latForce = 0.0;
             }
 
-            // 6. 摩擦圆约束：√(long² + lat²) ≤ μ × N_spring
-            //    当需求超过预算时按比例缩减两个分量 —— 轮子进入滑移/空转状态
-            double totalDemand = Math.sqrt(longForce * longForce + latForce * latForce);
-            if (totalDemand > frictionBudget && totalDemand > 1e-10) {
-                double scale = frictionBudget / totalDemand;
-                longForce *= scale;
-                latForce *= scale;
-                // 饱和 —— 驱动力无法达到目标速度，等价于轮子空转/侧滑
-            }
+            // ╔══════════════════════════════════════════════════════════════╗
+            // ║  [暂时禁用] 摩擦圆模型 — Binary Grip 已取代               ║
+            // ║                                                             ║
+            // ║  旧模型：√(long² + lat²) ≤ μ × N，按比例缩减两个分量。       ║
+            // ║  新模型：每轮独立 Binary Grip，驱动力min(需求, μ×N)。       ║
+            // ║  差速/转向等横向力分配由未来智能映射系统处理。               ║
+            // ╚══════════════════════════════════════════════════════════════╝
+            // double totalDemand = Math.sqrt(longForce * longForce + latForce * latForce);
+            // if (totalDemand > frictionBudget && totalDemand > 1e-10) {
+            //     double scale = frictionBudget / totalDemand;
+            //     longForce *= scale;
+            //     latForce *= scale;
+            // }
 
-            // 记录力需求/预算比（用于覆盖层显示，不参与物理）。
-            //
-            //  ⚠ 不使用 frictionBudget 做分母！因为 frictionBasis 被
-            //     MIN_IMPULSE_MULTIPLIER=500 放大了 ~50 倍，导致显示值
-            //     永远偏低（如 17%），无法反映真实的打滑/动力盈余程度。
-            //
-            //  改用「自然摩擦预算」—— 仅基于弹簧静载冲量 + 载荷转移 + 轻量下限
-            //  （~2 倍重量），不加 500× 安全放大器：
-            //     displayBudget = μ × max(adjustedSpringImpulse, nm × dt × 20.0)
-            //
-            //  这样当 P 控制器力需求超过自然抓地力时，显示值 >100%，
-            //  直观反映"轮子在空转/引擎力气大于轮胎抓地"。
-            //  加入 adjustedSpringImpulse 后，加速时前轮抓地↓→摩擦需求↑→提示推头，
-            //  刹车时前轮抓地↑→摩擦需求↓→提示制动稳定。
-            double displayBasis = Math.max(adjustedSpringImpulse, nm * dt * 20.0);
-            double displayBudget = mu * displayBasis;
-            this.frictionDemandRatio = totalDemand > 1e-10 ? totalDemand / Math.max(displayBudget, 1.0) : 0.0;
-
-            // 节流同步显示值（仅当值有明显变化时，最多每 5 tick 一次）
+            // 摩擦需求比已在上方 Binary Grip 段计算，此处仅做节流同步
             if (--this.frictionSyncCooldown <= 0
                     && Math.abs(this.frictionDemandRatio - this.lastSyncedFrictionRatio) > 0.02) {
                 this.lastSyncedFrictionRatio = this.frictionDemandRatio;
@@ -1018,6 +1052,9 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
             // 从当前物理速度推算本轮实际轮端 RPM（供发动机-轮速耦合）
             this.currentWheelRpm = TirePhysicsCalculator.calculateWheelRpm(forwardSpeed, rad);
         }
+
+        // 上报本轮消耗的轮端扭矩（供驾驶舱负载反射计算）
+        this.consumedWheelTorque = getTotalEngineLoad() * rad;
 
         this.forceTotal.applyImpulseAtPoint(sl, this.forcePos, this.forceVec);
         handle.applyForcesAndReset(this.forceTotal);
@@ -1238,19 +1275,28 @@ public class SuspensionTestBlockEntity extends SmartBlockEntity implements Block
     //  动力系统辅助方法
     // ====================================================================
     /**
-     * 获取用于客户端视觉轮子旋转的 RPM 值。 优先从座舱动力系统读取，降级回退到油门状态决定的固定值。
+     * 获取用于客户端视觉轮子旋转的 RPM 值。
+     * 优先从座舱读取目标轮端 RPM（由发动机转速经齿比推算），
+     * 降级回退到油门状态决定的固定值。
      */
     private double getVisualRpm() {
         SubLevel sl = Sable.HELPER.getContaining(this);
         if (sl != null) {
             CockpitBlockEntity cockpit = findCockpitInSubLevel(sl);
-            if (cockpit != null) {
-                int totalWheels = countSuspensionBlocksInSubLevel(sl);
-                var output = cockpit.getWheelOutput(totalWheels);
-                return output.wheelRpm();
+            if (cockpit != null && !cockpit.isStalled()) {
+                double idealRpm = cockpit.getTargetWheelRpm();
+                // 摩擦未饱和 → 滚动转速（轮子贴地正常转动）
+                // 摩擦饱和   → 理想转速（轮子空转/打滑视觉效果）
+                // 在摩擦需求率 0.8~1.3 区间渐变过渡，避免生硬跳变。
+                double ratio = this.frictionDemandRatio;
+                if (ratio > 0.1) {
+                    double blendFactor = Mth.clamp((ratio - 0.8) / 0.5, 0.0, 1.0);
+                    return Mth.lerp(blendFactor, this.currentWheelRpm, idealRpm);
+                }
+                return this.currentWheelRpm;
             }
         }
-        // 降级：无驾驶舱时根据油门状态
+        // 降级：无驾驶舱或熄火时根据油门状态
         if (this.throttleForward) {
             return FALLBACK_DRIVE_RPM;
         }

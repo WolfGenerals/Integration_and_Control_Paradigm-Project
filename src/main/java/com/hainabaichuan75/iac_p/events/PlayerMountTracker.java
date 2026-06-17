@@ -71,6 +71,23 @@ public class PlayerMountTracker {
 
     private static final Map<UUID, MountData> MOUNTED = new ConcurrentHashMap<>();
 
+    /**
+     * 通过 SubLevel UUID 查找当前骑乘该 SubLevel 的玩家。
+     * 用于 CockpitBlockEntity 向骑乘者发送实时状态包。
+     *
+     * @param subLevelUUID SubLevel 的 UUID
+     * @param level        服务端世界实例
+     * @return 骑乘该 SubLevel 的玩家，如果无人骑乘则返回 null
+     */
+    @Nullable
+    public static ServerPlayer getPlayerForSubLevel(UUID subLevelUUID, ServerLevel level) {
+        UUID playerUUID = SUBLEVEL_OCCUPANTS.get(subLevelUUID);
+        if (playerUUID == null) return null;
+        MinecraftServer server = level.getServer();
+        if (server == null) return null;
+        return server.getPlayerList().getPlayer(playerUUID);
+    }
+
     // ====== 目标 2：SubLevel 占用追踪（谁占用了哪个 SubLevel） ======
     /**
      * SubLevel UUID → 占用该 SubLevel 的玩家 UUID

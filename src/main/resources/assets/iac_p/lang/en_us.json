@@ -31,8 +31,8 @@
 
   "screen.iac_p.vehicle_config.title": "§l✦ Vehicle Config ✦",
   "screen.iac_p.vehicle_config.hint": "§7Click a key button then press any key · Pressure in Pa",
-  "screen.iac_p.vehicle_config.forward": "Forward",
-  "screen.iac_p.vehicle_config.backward": "Backward",
+  "screen.iac_p.vehicle_config.forward": "Fwd Spin",
+  "screen.iac_p.vehicle_config.backward": "Rev Spin",
   "screen.iac_p.vehicle_config.left": "Turn Left",
   "screen.iac_p.vehicle_config.right": "Turn Right",
   "screen.iac_p.vehicle_config.brake": "Brake",
@@ -133,6 +133,8 @@
   "debug.iac_p.overlay.current_speed": "Current Speed",
   "debug.iac_p.overlay.friction_demand": "Friction Demand",
 
+  "debug.iac_p.overlay.test_stand": "§7═══ §bEngine Test Stand §7═══",
+
   "screen.iac_p.vehicle_orientation.title": "§l✦ Vehicle Orientation ✦",
   "screen.iac_p.vehicle_orientation.total": "Total Suspensions: %d",
   "screen.iac_p.vehicle_orientation.no_suspension": "§cNo suspension blocks found on this vehicle",
@@ -151,7 +153,28 @@
   "screen.iac_p.vehicle_orientation.smart_off": "§7Smart Mapping OFF",
   "screen.iac_p.vehicle_orientation.status_active": "✔ Smart Mapping Active — Keys assigned automatically",
   "screen.iac_p.vehicle_orientation.status_inactive": "○ Smart Mapping Disabled — Using manual key config",
+  "screen.iac_p.vehicle_orientation.strafe": "Strafe",
   "screen.iac_p.vehicle_orientation.close": "Close",
 
-  "message.iac_p.smart_map_reversed": "§eControls reversed (W↔S · A↔D)"
+  "message.iac_p.smart_map_reversed": "§eControls reversed (W↔S · A↔D)",
+
+  "screen.iac_p.structure_info.title": "§l✦ Structure Overview ✦",
+  "screen.iac_p.structure_info.no_cockpit": "⚠ No cockpit block found in this structure",
+  "screen.iac_p.structure_info.block_header": "── Block Statistics ──",
+  "screen.iac_p.structure_info.block_summary": "Types: %d  |  Total: %d",
+  "screen.iac_p.structure_info.more": "…and %d more types",
+  "screen.iac_p.structure_info.weapon_header": "── Weapon Systems ──",
+  "screen.iac_p.structure_info.no_weapons": "No weapon systems detected",
+  "screen.iac_p.structure_info.turret_count": "Turret Bases: %d  (Assembled: %d)",
+  "screen.iac_p.structure_info.turret_entry": "Turret #%d @ %s",
+  "screen.iac_p.structure_info.status_label": "Status:",
+  "screen.iac_p.structure_info.connection_header": "── Connected Structures ──",
+  "screen.iac_p.structure_info.connection_turret": "▶ Turret @ %s",
+  "screen.iac_p.structure_info.conn_vehicle": "Vehicle SubLevel: %s",
+  "screen.iac_p.structure_info.conn_mainworld": "Main World (no vehicle connection)",
+  "screen.iac_p.structure_info.conn_grindstone": "Grindstone SubLevel: %s",
+  "screen.iac_p.structure_info.conn_rod": "LightningRod SubLevel: %s",
+  "screen.iac_p.structure_info.no_connections": "No assembled turret connections",
+  "screen.iac_p.structure_info.hint": "§7Press ESC or click Close to exit · Data is read-only",
+  "screen.iac_p.structure_info.close": "Close"
 }

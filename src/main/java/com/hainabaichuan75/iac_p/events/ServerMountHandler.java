@@ -237,6 +237,8 @@ public class ServerMountHandler {
             } else if (be instanceof CockpitBlockEntity cockpit) {
                 // 驾驶舱发动机回到怠速
                 cockpit.resetEngineToIdle();
+                // 重置原始油门方向输入（防止下车后残留油门信号）
+                cockpit.setRawThrottleDirection(0);
             }
         });
     }
