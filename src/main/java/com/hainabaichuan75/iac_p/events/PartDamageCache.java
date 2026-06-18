@@ -345,7 +345,8 @@ public final class PartDamageCache {
         level.levelEvent(2001, pos, Block.getId(currentState));
         level.setBlock(pos, Blocks.AIR.defaultBlockState(), 3);
 
-        IACP.LOGGER.debug("[PartDamage] 方块 {} 被摧毁", pos);
+        // 方块摧毁日志（保留极简标识，供诊断归属豁免时查询）
+
     }
 
     /**

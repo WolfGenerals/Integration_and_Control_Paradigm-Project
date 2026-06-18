@@ -502,6 +502,8 @@ public class ClientMountHandler {
             smartMappingActive = false;
             autoShiftEnabled = false;
             activeSkillId = com.hainabaichuan75.iac_p.skill.SkillRegistry.DEFAULT_SKILL_ID;
+            // 清空弹道特效（防止悬空）
+            WeaponOverlay.onDismount();
             // 强制关闭哨兵模式
             disableStationaryCamera();
             // 清空车辆状态缓存

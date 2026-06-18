@@ -16,14 +16,12 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.phys.Vec3;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.event.entity.EntityJoinLevelEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerInteractEvent;
 import net.neoforged.neoforge.event.server.ServerStartingEvent;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
-import org.joml.Vector3d;
 import org.joml.Vector3dc;
 
 import javax.annotation.Nullable;
@@ -147,10 +145,9 @@ public class PlayerMountTracker {
         // 持久化标记：标记玩家当前处于骑乘状态，用于断线重连时检测
         player.getPersistentData().putBoolean(MOUNTED_NBT_KEY, true);
 
-        // 目标 3（新增）：上车时设置无敌状态，仅指令级伤害可穿透
-        // setInvulnerable(true) 配合 Entity.isInvulnerableTo() 的 BYPASSES_INVULNERABILITY 检查，
-        // 使 /kill、/damage 等指令仍能正常作用，而一切非指令伤害被阻挡。
+        // 上车时设置无敌状态 + 玩家模型隐身（多人同步）
         player.setInvulnerable(true);
+        player.setInvisible(true);
 
         // 注册载具主体归属到 AffiliationRegistry
         try {
@@ -174,13 +171,15 @@ public class PlayerMountTracker {
         if (data != null) {
             // 清除载具归属
             AffiliationHelper.unregisterVehicleBody(data.subLevelUUID(), player.getUUID());
-            // 目标 2：清除 SubLevel 占用
-            SUBLEVEL_OCCUPANTS.remove(data.subLevelUUID());
+            // 清除该玩家占用的所有 SubLevel（防止残留）
+            SUBLEVEL_OCCUPANTS.values().removeIf(uid -> uid.equals(player.getUUID()));
             // 部件损坏：清理该 SubLevel 的耐久缓存
             PartDamageCache.clear(data.subLevelUUID(), player.serverLevel());
             IACP.LOGGER.info("[ServerMount] 已清除 SubLevel {} 的占用与部件缓存", data.subLevelUUID());
         } else {
             IACP.LOGGER.warn("[ServerMount] unmount() 时 MOUNTED 表中无此玩家数据");
+            // 即使 MOUNTED 表无记录，也清理 SUBLEVEL_OCCUPANTS 中残留的此玩家映射
+            SUBLEVEL_OCCUPANTS.values().removeIf(uid -> uid.equals(player.getUUID()));
         }
         // 清除持久化标记
         player.getPersistentData().remove(MOUNTED_NBT_KEY);
@@ -323,7 +322,56 @@ public class PlayerMountTracker {
         return scanSubLevelForCockpit(subLevel, level).isUnique();
     }
 
+    // ==========================================================================
+    //  以下方法供 SablePostPhysicsTickEvent 访问骑乘状态，
+    //  避免在物理 tick 分发器中重复持有 MOUNTED 表。
+    // ==========================================================================
+
+    /**
+     * 获取所有已挂载条目的 {@link Map#entrySet()} 视图，
+     * 供 {@link SablePostPhysicsTickEvent} 在物理 tick 后同步玩家位置。
+     * 返回的 Set 由 {@link ConcurrentHashMap#entrySet()} 支持，迭代安全。
+     */
+    static Set<Map.Entry<UUID, MountData>> getMountedEntries() {
+        return MOUNTED.entrySet();
+    }
+
+    /**
+     * 获取当前挂载玩家数量（用于快速判空）。
+     */
+    static int getMountedCount() {
+        return MOUNTED.size();
+    }
+
+    /**
+     * 更新指定玩家的 MountData 中最后位姿位置字段。
+     * 由 {@link SablePostPhysicsTickEvent} 在物理 tick 后调用，
+     * 替代原 {@link #onServerTick} 中的手动替换。
+     */
+    static void updateMountLastPose(UUID playerUUID, double poseX, double poseZ) {
+        MOUNTED.computeIfPresent(playerUUID, (k, data) -> new MountData(
+                data.subLevelUUID(),
+                data.cockpitLocalX(), data.cockpitLocalY(), data.cockpitLocalZ(),
+                poseX, poseZ
+        ));
+    }
+
     // ====== 每 tick 处理 ======
+
+    /**
+     * 服务端每游戏 tick 处理（20Hz）。
+     * <p>
+     * <b>仅处理生命周期清理</b>：玩家断线、死亡、SubLevel 销毁时的自动下车。
+     * <p>
+     * <b>骑乘玩家位置同步已迁移</b>至
+     * {@link SablePostPhysicsTickEvent#onPostPhysicsTick(ForgeSablePostPhysicsTickEvent)}，
+     * 以物理 tick 频率 (~100Hz) 执行。分裂原因：
+     * <ul>
+     *   <li>位置同步需要最新的 SubLevel logicalPose，物理 tick 后立即获取最佳</li>
+     *   <li>生命周期清理对延迟不敏感，留在 20Hz 游戏 tick 足够</li>
+     *   <li>减少每游戏 tick 的工作量，为主线程腾出预算</li>
+     * </ul>
+     */
     @SubscribeEvent
     public static void onServerTick(ServerTickEvent.Post event) {
         // 炮塔瞄准已移至 TurretTargetC2SPacket.handle() 直接驱动，不再依赖 tick
@@ -332,10 +380,8 @@ public class PlayerMountTracker {
             return;
         }
 
-        // 轻度日志：每 100 tick ≈ 5 秒
-        long gameTime = 0;
-
-        // 遍历所有已挂载玩家
+        // 遍历所有已挂载玩家 — 仅处理生命周期清理
+        // 位置同步已移至 SablePostPhysicsTickEvent，以物理 tick 频率执行
         for (var it = MOUNTED.entrySet().iterator(); it.hasNext();) {
             var entry = it.next();
             UUID playerUUID = entry.getKey();
@@ -393,66 +439,8 @@ public class PlayerMountTracker {
                 continue;
             }
 
-            // === 玩家位置同步到驾驶舱方块底部 ===
-            // 将玩家固定在驾驶舱方块底部中心（世界空间），随 SubLevel 物理运动。
-            // 零碰撞箱确保无敌（爆炸、近战、投射物、生物仇恨均无效）。
-            var logicalPose = subLevel.logicalPose();
-            Vector3d worldCockpitPos = new Vector3d();
-            logicalPose.transformPosition(
-                    new Vector3d(data.cockpitLocalX(), data.cockpitLocalY(), data.cockpitLocalZ()),
-                    worldCockpitPos);
-
-            // 计算朝向：使用 pose 的旋转矩阵（不受车辆是否移动影响）
-            Vector3d localOrigin = new Vector3d();
-            Vector3d localForward = new Vector3d();
-            logicalPose.transformPosition(new Vector3d(0, 0, 0), localOrigin);
-            logicalPose.transformPosition(new Vector3d(0, 0, 1), localForward);
-            double fdx = localForward.x - localOrigin.x;
-            double fdz = localForward.z - localOrigin.z;
-            if (fdx * fdx + fdz * fdz > 1e-8) {
-                float yaw = (float) Math.toDegrees(Math.atan2(-fdx, fdz));
-                player.setYRot(yaw);
-                player.setYHeadRot(yaw);
-                player.yBodyRot = yaw;
-                player.yBodyRotO = yaw;
-            }
-
-            // 更新最后位姿位置
-            Vector3dc posePos = logicalPose.position();
-            MountData updatedData = new MountData(
-                    data.subLevelUUID(),
-                    data.cockpitLocalX(), data.cockpitLocalY(), data.cockpitLocalZ(),
-                    posePos.x(), posePos.z()
-            );
-            MOUNTED.put(playerUUID, updatedData);
-
-            // 设置位置（底部中心）
-            player.setPos(worldCockpitPos.x, worldCockpitPos.y, worldCockpitPos.z);
-
-            // 速度归零 + 零碰撞箱 + 禁用物理/移动
-            // 碰撞箱设在玩家当前位置（非世界原点），避免影响渲染拣选
-            player.setDeltaMovement(Vec3.ZERO);
-            player.setBoundingBox(new net.minecraft.world.phys.AABB(
-                    worldCockpitPos.x, worldCockpitPos.y, worldCockpitPos.z,
-                    worldCockpitPos.x, worldCockpitPos.y, worldCockpitPos.z));
-            player.noPhysics = true;
-            player.setNoGravity(true);
-            player.getAbilities().flying = true;
-            player.getAbilities().setFlyingSpeed(0.0f);
-            player.onUpdateAbilities();
-
-            // 无敌保护：防止一切非指令伤害，Entity.isInvulnerableTo() 层拦截
-            // setInvulnerable(true) 配合 BYPASSES_INVULNERABILITY 标签，
-            // 使 /kill、/damage 指令仍能正常作用，非指令伤害全部阻挡
-            player.setInvulnerable(true);
-
-            // 额外碰撞保护：setPos() + 零碰撞箱使实体位置缓存随之刷新，
-            // 确保物理引擎（含 Sable 的 SubLevelEntityCollision）完全忽略该实体
-            // 轻度日志：每 100 tick 打印一次
-            if (gameTime == 0) {
-                gameTime = level.getGameTime();
-            }
-            // 每 tick 位置日志已移除（性能优化）
+            // 位置同步已移至 SablePostPhysicsTickEvent (物理 tick 频率)
+            // 此处仅做生命周期清理，SubLevel 正常存在时无需额外操作
         }
     }
 
@@ -484,8 +472,9 @@ public class PlayerMountTracker {
         player.getAbilities().flying = false;
         player.getAbilities().setFlyingSpeed(0.05f);
         player.onUpdateAbilities();
-        // 移除无敌状态（上车时设为 true），恢复可被伤害
+        // 移除无敌状态 + 恢复玩家模型可见
         player.setInvulnerable(false);
+        player.setInvisible(false);
     }
 
     // ====== 服务端生命周期清理 ======
