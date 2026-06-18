@@ -8,5 +8,15 @@
       }
     ],
     "subtitle": "subtitles.iac_p.shotgun_fire"
+  },
+  "turret_fire": {
+    "sounds": [
+      {
+        "name": "iac_p:shotgun",
+        "attenuation_distance": 48,
+        "volume": 1.0
+      }
+    ],
+    "subtitle": "subtitles.iac_p.turret_fire"
   }
 }

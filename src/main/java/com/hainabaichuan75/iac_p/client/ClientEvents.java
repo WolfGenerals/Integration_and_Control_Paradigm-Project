@@ -23,6 +23,7 @@ import net.minecraft.client.gui.screens.inventory.InventoryScreen;
 import net.neoforged.neoforge.client.event.ScreenEvent;
 import dev.ryanhcode.sable.Sable;
 import dev.ryanhcode.sable.sublevel.SubLevel;
+import org.joml.Vector3d;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
@@ -618,14 +619,33 @@ public class ClientEvents {
      */
     @SubscribeEvent
     public static void onRenderPlayer(RenderPlayerEvent.Pre event) {
-        if (!ClientMountHandler.isMounted()) {
-            return;
-        }
-        if (event.getEntity() != net.minecraft.client.Minecraft.getInstance().player) {
+        var player = event.getEntity();
+        var mc = Minecraft.getInstance();
+
+        // 1. 玩家自身上车 → 隐藏（本地玩家立即生效）
+        if (ClientMountHandler.isMounted() && player == mc.player) {
+            event.setCanceled(true);
             return;
         }
 
-        event.setCanceled(true);
+        // 2. 服务端已设为不可见 → 隐藏（其他玩家视角）
+        if (player.isInvisible()) {
+            event.setCanceled(true);
+            return;
+        }
+
+        // 3. 降级检测：玩家位置在 SubLevel 内 → 上车状态
+        //    覆盖 isInvisible() 尚未同步的时间窗口
+        if (mc.level != null && player.isAlive()) {
+            try {
+                SubLevel sl = Sable.HELPER.getContaining(mc.level,
+                        new Vector3d(player.getX(), player.getY(), player.getZ()));
+                if (sl != null) {
+                    event.setCanceled(true);
+                }
+            } catch (Exception ignored) {
+            }
+        }
     }
 
     // ==================================================================

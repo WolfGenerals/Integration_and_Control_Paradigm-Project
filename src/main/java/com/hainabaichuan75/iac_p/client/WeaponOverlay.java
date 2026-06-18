@@ -82,12 +82,30 @@ public class WeaponOverlay {
     /**
      * 霰弹散布最大角度（度）
      */
-    private static final double SHOTGUN_SPREAD_MAX_DEG = 15.0;
+    private static final double SHOTGUN_SPREAD_MAX_DEG = 10.0;
 
     /**
      * 霰弹枪枪口偏移（格）：将开火起始点沿枪管方向前移，避免自伤
      */
     private static final double SHOTGUN_MUZZLE_OFFSET = 0.6;
+
+    /**
+     * 炮塔枪口偏移（格）。
+     * 炮塔射线起点在避雷针方块中心，需沿炮管方向前移才能越过炮管方块表面。
+     * 与 {@link #SHOTGUN_MUZZLE_OFFSET} 分开配置以分别调优。
+     */
+    private static final double TURRET_MUZZLE_OFFSET = 0.6;
+
+    /**
+     * 开火速度偏移系数（秒）。
+     * <p>
+     * 将枪口发射点沿载具瞬时速度方向偏移 {@code velocity × 系数}，补偿从开火到伤害判定
+     * 之间的位姿时间差。纯客户端偏移，服务端无需额外处理。
+     * <p>
+     * 调优建议：0.05 ≈ 1 游戏 tick，值越大高速偏移越明显。
+     * 仅作用于水平速度分量，不影响垂直弹道。
+     */
+    private static final double FIRING_SPEED_OFFSET = 0.05;
 
     /**
      * 霰弹枪开火最小间隔（tick）
@@ -132,6 +150,17 @@ public class WeaponOverlay {
      * 防止旧世界的弹道线条在新世界闪现。
      */
     public static void onWorldLoad() {
+        clearAll();
+    }
+
+    /**
+     * 下车时清空所有弹道特效，防止特效悬空。
+     */
+    public static void onDismount() {
+        clearAll();
+    }
+
+    private static void clearAll() {
         lastHitPos = null;
         lastHitType = "";
         activeFires.clear();
@@ -195,32 +224,76 @@ public class WeaponOverlay {
         UUID mountedUUID = mountedSL.getUniqueId();
         float partialTick = mc.getTimer().getGameTimeDeltaPartialTick(false);
 
+        // ---- 采样载具瞬时速度（用于开火射线外推） ----
+        Vec3 vehicleVel = sampleVehicleVelocity(mc, mountedSL);
+
         activeFires.clear();
 
         // ---- 首选：通过 ComponentRegistry 查询武器底座 ----
         var turretEntries = ComponentRegistry.getComponents(mountedUUID, ComponentRole.TURRET_BASE);
         var shotgunEntries = ComponentRegistry.getComponents(mountedUUID, ComponentRole.SHOTGUN_BASE);
         if (!turretEntries.isEmpty() || !shotgunEntries.isEmpty()) {
-            fireFromRegistry(mc, container, mountedUUID, partialTick, turretEntries, shotgunEntries);
+            fireFromRegistry(mc, container, mountedUUID, partialTick, vehicleVel, turretEntries, shotgunEntries);
             return;
         }
 
         // ---- 回退：chunk 全量遍历（注册表尚未就绪） ----
-        IACP.LOGGER.debug("[WeaponOverlay] ComponentRegistry 无武器数据，回退到 chunk 扫描");
-        fireFromScan(mc, mountedSL, container, mountedUUID, partialTick);
+        fireFromScan(mc, mountedSL, container, mountedUUID, partialTick, vehicleVel);
+    }
+
+    /**
+     * 采样载具 SubLevel 当前位置的瞬时速度向量。
+     * <p>
+     * 用于在开火数据包中携带速度信息，服务端据此做射线起点外推，
+     * 补偿从客户端开火到服务端处理之间的位姿时间差。
+     *
+     * @return 速度向量（m/s），采样失败返回 {@link Vec3#ZERO}
+     */
+    private static Vec3 sampleVehicleVelocity(Minecraft mc, ClientSubLevel mountedSL) {
+        if (mc.level == null) return Vec3.ZERO;
+        try {
+            // 使用第一个悬挂位置或 SubLevel 中心查询速度
+            Vec3 queryPos;
+            var suspList = ClientMountHandler.getSuspensionPositions();
+            if (!suspList.isEmpty()) {
+                BlockPos p = suspList.get(0);
+                queryPos = new Vec3(p.getX() + 0.5, p.getY() + 0.5, p.getZ() + 0.5);
+            } else {
+                // 降级：用 SubLevel renderPose 将中心方块变换到世界坐标
+                var renderPose = mountedSL.renderPose(0);
+                if (renderPose == null) return Vec3.ZERO;
+                var plot = mountedSL.getPlot();
+                if (plot == null) return Vec3.ZERO;
+                var centerBP = plot.getCenterBlock();
+                if (centerBP == null) return Vec3.ZERO;
+                var localCenter = new org.joml.Vector3d(
+                        centerBP.getX() + 0.5, centerBP.getY() + 0.5, centerBP.getZ() + 0.5);
+                var worldCenter = new org.joml.Vector3d();
+                renderPose.transformPosition(localCenter, worldCenter);
+                queryPos = new Vec3(worldCenter.x, worldCenter.y, worldCenter.z);
+            }
+            org.joml.Vector3d vel = dev.ryanhcode.sable.Sable.HELPER.getVelocity(
+                    mc.level, new org.joml.Vector3d(queryPos.x, queryPos.y, queryPos.z));
+            if (vel != null) {
+                return new Vec3(vel.x(), vel.y(), vel.z());
+            }
+        } catch (Exception e) {
+            // 采样失败不影响开火，只是无外推
+        }
+        return Vec3.ZERO;
     }
 
     /**
      * 从注册表数据开火（炮塔 + 霰弹枪）。
      */
     private static void fireFromRegistry(Minecraft mc, SubLevelContainer container,
-            UUID mountedUUID, float partialTick,
+            UUID mountedUUID, float partialTick, Vec3 vehicleVel,
             List<ComponentEntry> turretEntries,
             List<ComponentEntry> shotgunEntries) {
         for (var entry : turretEntries) {
             BlockEntity be = entry.blockEntity();
             if (be instanceof TurretBaseBlockEntity tb && tb.isAssembled()) {
-                fireSingleTurret(mc, container, mountedUUID, partialTick, tb);
+                fireSingleTurret(mc, container, mountedUUID, partialTick, vehicleVel, tb);
             }
         }
 
@@ -233,22 +306,13 @@ public class WeaponOverlay {
             lastShotgunFireTick = currentTick;
         }
 
-        // 播放霰弹枪开火音效（客户端本地，不会被打断）
-        if (mc.level != null) {
-            mc.level.playLocalSound(
-                    mc.player.getX(), mc.player.getY(), mc.player.getZ(),
-                    ModSounds.SHOTGUN_FIRE.get(),
-                    SoundSource.PLAYERS,
-                    1.5f, // 音量稍大
-                    1.0f, // 音调
-                    false // 不延迟
-            );
-        }
+        // 音效已迁移至服务端 WeaponFireC2SPacket.handle() 广播，
+        // 确保所有玩家都能听到 + 使用 muzzle 位置获得空间感
 
         for (var entry : shotgunEntries) {
             BlockEntity be = entry.blockEntity();
             if (be instanceof ShotgunBaseBlockEntity sb && sb.isAssembled()) {
-                fireSingleShotgun(mc, container, mountedUUID, partialTick, sb);
+                fireSingleShotgun(mc, container, mountedUUID, partialTick, vehicleVel, sb);
             }
         }
     }
@@ -258,7 +322,7 @@ public class WeaponOverlay {
      */
     private static void fireFromScan(Minecraft mc, ClientSubLevel mountedSL,
             SubLevelContainer container,
-            UUID mountedUUID, float partialTick) {
+            UUID mountedUUID, float partialTick, Vec3 vehicleVel) {
         LevelPlot plot = mountedSL.getPlot();
         if (plot == null) {
             return;
@@ -290,7 +354,7 @@ public class WeaponOverlay {
                         var be = mc.level.getBlockEntity(wp);
                         if (be instanceof TurretBaseBlockEntity tb) {
                             if (tb.isAssembled()) {
-                                fireSingleTurret(mc, container, mountedUUID, partialTick, tb);
+                                fireSingleTurret(mc, container, mountedUUID, partialTick, vehicleVel, tb);
                             }
                         } else if (be instanceof ShotgunBaseBlockEntity sb) {
                             if (sb.isAssembled() && shotgunReady) {
@@ -303,7 +367,7 @@ public class WeaponOverlay {
                                             1.5f, 1.0f, false);
                                     sgSoundPlayed = true;
                                 }
-                                fireSingleShotgun(mc, container, mountedUUID, partialTick, sb);
+                                fireSingleShotgun(mc, container, mountedUUID, partialTick, vehicleVel, sb);
                             }
                         }
                     }
@@ -317,6 +381,9 @@ public class WeaponOverlay {
      * <p>
      * 遍历所有 SubLevel，将命中点世界坐标变换到每个 SubLevel 的局部空间，
      * 检查该位置是否有非空气方块。找到即返回（优先返回第一个匹配的 SubLevel）。
+     * <p>
+     * 使用 {@code logicalPose()}（非插值）以匹配 {@link #raycastGeneric}
+     * 中 SubLevel clip 所使用的位姿，确保坐标转换一致性。
      *
      * @param hitPos 世界坐标命中点
      * @param level 客户端世界
@@ -333,6 +400,7 @@ public class WeaponOverlay {
                 if (sl.isRemoved() || !(sl instanceof ClientSubLevel)) {
                     continue;
                 }
+                // 使用 logicalPose（非插值），与 raycastGeneric 中的 SubLevel clip 保持一致
                 var pose = sl.logicalPose();
                 if (pose == null) {
                     continue;
@@ -344,7 +412,7 @@ public class WeaponOverlay {
                 }
             }
         } catch (Exception e) {
-            IACP.LOGGER.warn("[WeaponOverlay] resolveSubLevelHit 异常: {}", e.getMessage());
+            IACP.LOGGER.debug("[WeaponOverlay] resolveSubLevelHit 异常: {}", e.getMessage());
         }
         return null;
     }
@@ -356,7 +424,7 @@ public class WeaponOverlay {
      * 8 根射线共享同一个枪口原点，各自独立做射线检测、独立发数据包、独立渲染弹道。
      */
     private static void fireSingleShotgun(Minecraft mc, SubLevelContainer container,
-            UUID mountedUUID, float partialTick,
+            UUID mountedUUID, float partialTick, Vec3 vehicleVel,
             ShotgunBaseBlockEntity sb) {
         UUID rodId = sb.getLightningRodSubLevelId();
         if (rodId == null) {
@@ -392,6 +460,9 @@ public class WeaponOverlay {
         // 枪口偏移：沿枪管方向前移，避免弹道起点在炮管内导致自伤
         Vec3 muzzleOrigin = origin.add(dirNorm.scale(SHOTGUN_MUZZLE_OFFSET));
 
+        // 速度偏移：将发射点沿载具速度方向偏移，补偿开火到判定间的时间差
+        muzzleOrigin = muzzleOrigin.add(vehicleVel.scale(FIRING_SPEED_OFFSET));
+
         // ---- 构建局部坐标系：以枪管方向为 Z 轴，计算垂直向量 ----
         Vec3 refUp;
         if (Math.abs(dirNorm.y) < 0.9) {
@@ -425,8 +496,8 @@ public class WeaponOverlay {
                     .add(up.scale(spreadRadV))
                     .normalize();
 
-            // 从枪口偏移点沿弹丸方向射线检测（最大 100 格）
-            Vec3 hitPos = raycastGeneric(mc, muzzleOrigin, pelletDir, SHOTGUN_MAX_DISTANCE);
+            // 从枪口偏移点沿弹丸方向射线检测（最大 100 格），跳过自己的枪管
+            Vec3 hitPos = raycastGeneric(mc, muzzleOrigin, pelletDir, SHOTGUN_MAX_DISTANCE, rodId);
 
             // 弹道渲染（起点为枪口偏移点）
             activeFires.add(new TurretFireInstance(muzzleOrigin, hitPos));
@@ -437,12 +508,16 @@ public class WeaponOverlay {
                 ModNetworking.sendToServer(new WeaponFireC2SPacket(
                         muzzleOrigin.x, muzzleOrigin.y, muzzleOrigin.z,
                         hitPos.x, hitPos.y, hitPos.z,
-                        subHit.uuid(), subHit.localPos()
+                        subHit.uuid(), subHit.localPos(),
+                        vehicleVel.x, vehicleVel.y, vehicleVel.z,
+                        WeaponFireC2SPacket.WEAPON_SHOTGUN
                 ));
             } else {
                 ModNetworking.sendToServer(new WeaponFireC2SPacket(
                         muzzleOrigin.x, muzzleOrigin.y, muzzleOrigin.z,
-                        hitPos.x, hitPos.y, hitPos.z
+                        hitPos.x, hitPos.y, hitPos.z,
+                        vehicleVel.x, vehicleVel.y, vehicleVel.z,
+                        WeaponFireC2SPacket.WEAPON_SHOTGUN
                 ));
             }
         }
@@ -458,7 +533,7 @@ public class WeaponOverlay {
      * 转回世界坐标，解决目标移动/旋转时的命中失效问题（"旋转体无敌"）。
      */
     private static void fireSingleTurret(Minecraft mc, SubLevelContainer container,
-            UUID mountedUUID, float partialTick,
+            UUID mountedUUID, float partialTick, Vec3 vehicleVel,
             TurretBaseBlockEntity tb) {
         UUID rodId = tb.getLightningRodSubLevelId();
         if (rodId == null) {
@@ -479,10 +554,10 @@ public class WeaponOverlay {
             return;
         }
         BlockPos localBP = rodPlot.getCenterBlock();
-        // 避雷针方块中心（无偏移）→ 主世界空间
+        // 避雷针方块中心 → 主世界空间
         var localCenter = new Vector3d(localBP.getX() + 0.5, localBP.getY() + 0.5, localBP.getZ() + 0.5);
         var worldCenter = pose.transformPosition(localCenter);
-        Vec3 origin = new Vec3(worldCenter.x, worldCenter.y, worldCenter.z);
+        Vec3 blockCenter = new Vec3(worldCenter.x, worldCenter.y, worldCenter.z);
 
         // 炮管朝向（Z 轴正向旋转到世界空间）
         Vector3d fwd = new Vector3d(0, 0, 1);
@@ -490,28 +565,39 @@ public class WeaponOverlay {
         Vec3 dir = new Vec3(fwd.x, fwd.y, fwd.z);
 
         // 准星偏向：在 ±5° 锥角内将弹道拉向玩家瞄准点
-        dir = applyAimBias(dir, origin, lastHitPos);
+        dir = applyAimBias(dir, blockCenter, lastHitPos);
+        Vec3 dirNorm = dir.normalize();
 
-        // 从炮口沿（可能经过偏修正的）方向做射线检测
-        Vec3 hitPos = raycastGeneric(mc, origin, dir, MAX_RAY_DISTANCE);
+        // 枪口偏移：沿炮管方向前移，避免射线起点在方块内部挡弹
+        Vec3 muzzleOrigin = blockCenter.add(dirNorm.scale(TURRET_MUZZLE_OFFSET));
 
-        // 固定起点（避雷针方块中心）+ 命中点
-        activeFires.add(new TurretFireInstance(origin, hitPos));
+        // 速度偏移：将发射点沿载具速度方向偏移，补偿开火到判定间的时间差
+        muzzleOrigin = muzzleOrigin.add(vehicleVel.scale(FIRING_SPEED_OFFSET));
+
+        // 从枪口起点沿修正方向做射线检测
+        Vec3 hitPos = raycastGeneric(mc, muzzleOrigin, dir, MAX_RAY_DISTANCE);
+
+        // 固定起点 + 命中点（弹道渲染使用枪口偏移点）
+        activeFires.add(new TurretFireInstance(muzzleOrigin, hitPos));
 
         // ---- 判断是否命中 SubLevel 方块，转换为局部坐标发送 ----
         SubLevelHit subHit = resolveSubLevelHit(hitPos, mc.level);
         if (subHit != null) {
-            // 命中 SubLevel：发送局部坐标 + UUID，服务端用当前 pose 转回世界坐标
+            // 命中 SubLevel：发送局部坐标 + UUID + 速度外推
             ModNetworking.sendToServer(new WeaponFireC2SPacket(
-                    origin.x, origin.y, origin.z,
+                    muzzleOrigin.x, muzzleOrigin.y, muzzleOrigin.z,
                     hitPos.x, hitPos.y, hitPos.z,
-                    subHit.uuid(), subHit.localPos()
+                    subHit.uuid(), subHit.localPos(),
+                    vehicleVel.x, vehicleVel.y, vehicleVel.z,
+                    WeaponFireC2SPacket.WEAPON_TURRET
             ));
         } else {
-            // 非 SubLevel 命中（地形/实体等）：发送世界坐标，保持原有行为
+            // 非 SubLevel 命中（地形/实体等）：发送世界坐标 + 速度外推
             ModNetworking.sendToServer(new WeaponFireC2SPacket(
-                    origin.x, origin.y, origin.z,
-                    hitPos.x, hitPos.y, hitPos.z
+                    muzzleOrigin.x, muzzleOrigin.y, muzzleOrigin.z,
+                    hitPos.x, hitPos.y, hitPos.z,
+                    vehicleVel.x, vehicleVel.y, vehicleVel.z,
+                    WeaponFireC2SPacket.WEAPON_TURRET
             ));
         }
     }
@@ -598,6 +684,14 @@ public class WeaponOverlay {
      * @return 命中点世界坐标，无命中时返回射线端点
      */
     private static Vec3 raycastGeneric(Minecraft mc, Vec3 origin, Vec3 dir, double maxDist) {
+        return raycastGeneric(mc, origin, dir, maxDist, null);
+    }
+
+    /**
+     * 通用射线检测 —— 可跳过指定 SubLevel（用于避免子弹打中自己的枪管）。
+     */
+    private static Vec3 raycastGeneric(Minecraft mc, Vec3 origin, Vec3 dir, double maxDist,
+            @Nullable UUID skipSubLevel) {
         Vec3 to = origin.add(dir.scale(maxDist));
         double closestDistSq = maxDist * maxDist;
         Vec3 closestHit = null;
@@ -667,6 +761,11 @@ public class WeaponOverlay {
                         continue;
                     }
 
+                    // 跳过发射自己的枪管 SubLevel，防止子弹穿模击中自身
+                    if (skipSubLevel != null && sl.getUniqueId().equals(skipSubLevel)) {
+                        continue;
+                    }
+
                     // AABB 快速剔除：检查射线是否经过此 SubLevel 的物理世界 AABB
                     var physBB = sl.boundingBox();
                     if (physBB == null) {
@@ -714,7 +813,7 @@ public class WeaponOverlay {
                 }
             }
         } catch (Exception e) {
-            IACP.LOGGER.warn("[WeaponOverlay] SubLevel 局部空间 clip 异常: {}", e.getMessage());
+            IACP.LOGGER.debug("[WeaponOverlay] SubLevel 局部空间 clip 异常: {}", e.getMessage());
         }
         if (closestHit == null) {
             closestHit = to;

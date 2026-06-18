@@ -5,6 +5,7 @@ import com.hainabaichuan75.iac_p.affiliation.WorldLoadHandler;
 import com.hainabaichuan75.iac_p.events.MountedProtectionHandler;
 import com.hainabaichuan75.iac_p.events.PartDamageCache;
 import com.hainabaichuan75.iac_p.events.PlayerMountTracker;
+import com.hainabaichuan75.iac_p.events.SablePostPhysicsTickEvent;
 import com.hainabaichuan75.iac_p.events.SubLevelProjectileHandler;
 import com.hainabaichuan75.iac_p.index.ModBlockEntityTypes;
 import com.hainabaichuan75.iac_p.index.ModBlocks;
@@ -55,6 +56,9 @@ public class IACP {
         NeoForge.EVENT_BUS.register(SubLevelProjectileHandler.class);
         // 部件损坏缓存 + 裂纹同步 + chunk 加载重发
         NeoForge.EVENT_BUS.register(PartDamageCache.class);
+
+        // Sable 物理 tick 后处理：将延迟敏感的玩家位置同步提升到物理 tick 频率
+        NeoForge.EVENT_BUS.register(SablePostPhysicsTickEvent.class);
 
         // 归属系统调试命令
         NeoForge.EVENT_BUS.register(AffiliationCommand.class);

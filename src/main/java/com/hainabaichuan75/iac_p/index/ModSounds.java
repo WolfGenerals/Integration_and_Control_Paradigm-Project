@@ -24,4 +24,11 @@ public class ModSounds {
     public static final Supplier<SoundEvent> SHOTGUN_FIRE = SOUND_EVENTS.register("shotgun_fire",
             () -> SoundEvent.createVariableRangeEvent(
                     ResourceLocation.fromNamespaceAndPath(IACP.MODID, "shotgun_fire")));
+
+    /**
+     * 炮塔开火音效
+     */
+    public static final Supplier<SoundEvent> TURRET_FIRE = SOUND_EVENTS.register("turret_fire",
+            () -> SoundEvent.createVariableRangeEvent(
+                    ResourceLocation.fromNamespaceAndPath(IACP.MODID, "turret_fire")));
 }
