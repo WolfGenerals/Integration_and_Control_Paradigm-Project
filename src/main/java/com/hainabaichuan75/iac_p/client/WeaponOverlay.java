@@ -4,6 +4,7 @@ import com.hainabaichuan75.iac_p.IACP;
 import com.hainabaichuan75.iac_p.affiliation.ComponentEntry;
 import com.hainabaichuan75.iac_p.affiliation.ComponentRegistry;
 import com.hainabaichuan75.iac_p.affiliation.ComponentRole;
+import com.hainabaichuan75.iac_p.content.blocks.shotgun.ShotgunBaseBlockEntity;
 import com.hainabaichuan75.iac_p.content.blocks.turret.TurretBaseBlockEntity;
 import dev.ryanhcode.sable.api.sublevel.SubLevelContainer;
 import dev.ryanhcode.sable.companion.math.BoundingBox3ic;
@@ -34,10 +35,14 @@ import org.joml.Vector3d;
 import javax.annotation.Nullable;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Random;
 import java.util.UUID;
 
+import com.hainabaichuan75.iac_p.index.ModSounds;
 import com.hainabaichuan75.iac_p.network.ModNetworking;
 import com.hainabaichuan75.iac_p.network.packets.WeaponFireC2SPacket;
+import net.minecraft.client.resources.sounds.SimpleSoundInstance;
+import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.level.block.entity.BlockEntity;
 
 /**
@@ -58,6 +63,46 @@ public class WeaponOverlay {
      * 射线最大检测距离（格）
      */
     public static final double MAX_RAY_DISTANCE = 1000.0;
+
+    /**
+     * 霰弹枪最大检测距离（格）
+     */
+    private static final double SHOTGUN_MAX_DISTANCE = 100.0;
+
+    /**
+     * 霰弹枪每发弹丸数
+     */
+    private static final int SHOTGUN_PELLETS = 8;
+
+    /**
+     * 霰弹散布正态分布标准差（度），3σ ≈ 15°
+     */
+    private static final double SHOTGUN_SPREAD_SIGMA_DEG = 5.0;
+
+    /**
+     * 霰弹散布最大角度（度）
+     */
+    private static final double SHOTGUN_SPREAD_MAX_DEG = 15.0;
+
+    /**
+     * 霰弹枪枪口偏移（格）：将开火起始点沿枪管方向前移，避免自伤
+     */
+    private static final double SHOTGUN_MUZZLE_OFFSET = 0.6;
+
+    /**
+     * 霰弹枪开火最小间隔（tick）
+     */
+    private static final int SHOTGUN_FIRE_COOLDOWN_TICKS = 5;
+
+    /**
+     * 霰弹枪上次开火的游戏刻
+     */
+    private static int lastShotgunFireTick = 0;
+
+    /**
+     * 霰弹枪随机数发生器
+     */
+    private static final Random SHOTGUN_RANDOM = new Random();
 
     /**
      * 准星偏向最大锥角（度）。弹道在此锥角内被拉向玩家准星瞄准点， 用于掩饰炮塔旋转延迟带来的命中偏差。
@@ -152,33 +197,59 @@ public class WeaponOverlay {
 
         activeFires.clear();
 
-        // ---- 首选：通过 ComponentRegistry 查询炮塔底座 ----
+        // ---- 首选：通过 ComponentRegistry 查询武器底座 ----
         var turretEntries = ComponentRegistry.getComponents(mountedUUID, ComponentRole.TURRET_BASE);
-        if (!turretEntries.isEmpty()) {
-            fireFromRegistry(mc, container, mountedUUID, partialTick, turretEntries);
+        var shotgunEntries = ComponentRegistry.getComponents(mountedUUID, ComponentRole.SHOTGUN_BASE);
+        if (!turretEntries.isEmpty() || !shotgunEntries.isEmpty()) {
+            fireFromRegistry(mc, container, mountedUUID, partialTick, turretEntries, shotgunEntries);
             return;
         }
 
         // ---- 回退：chunk 全量遍历（注册表尚未就绪） ----
-        IACP.LOGGER.debug("[WeaponOverlay] ComponentRegistry 无炮塔数据，回退到 chunk 扫描");
+        IACP.LOGGER.debug("[WeaponOverlay] ComponentRegistry 无武器数据，回退到 chunk 扫描");
         fireFromScan(mc, mountedSL, container, mountedUUID, partialTick);
     }
 
     /**
-     * 从注册表数据开火。
+     * 从注册表数据开火（炮塔 + 霰弹枪）。
      */
     private static void fireFromRegistry(Minecraft mc, SubLevelContainer container,
             UUID mountedUUID, float partialTick,
-            List<ComponentEntry> turretEntries) {
+            List<ComponentEntry> turretEntries,
+            List<ComponentEntry> shotgunEntries) {
         for (var entry : turretEntries) {
             BlockEntity be = entry.blockEntity();
-            if (!(be instanceof TurretBaseBlockEntity tb)) {
-                continue;
+            if (be instanceof TurretBaseBlockEntity tb && tb.isAssembled()) {
+                fireSingleTurret(mc, container, mountedUUID, partialTick, tb);
             }
-            if (!tb.isAssembled()) {
-                continue;
+        }
+
+        // 霰弹枪组冷却：统一在 tick 级别检查，确保多枪同时开火
+        if (mc.level != null) {
+            int currentTick = (int) mc.level.getGameTime();
+            if (currentTick - lastShotgunFireTick < SHOTGUN_FIRE_COOLDOWN_TICKS) {
+                return; // 霰弹枪组冷却中，跳过所有霰弹枪
             }
-            fireSingleTurret(mc, container, mountedUUID, partialTick, tb);
+            lastShotgunFireTick = currentTick;
+        }
+
+        // 播放霰弹枪开火音效（客户端本地，不会被打断）
+        if (mc.level != null) {
+            mc.level.playLocalSound(
+                    mc.player.getX(), mc.player.getY(), mc.player.getZ(),
+                    ModSounds.SHOTGUN_FIRE.get(),
+                    SoundSource.PLAYERS,
+                    1.5f, // 音量稍大
+                    1.0f, // 音调
+                    false // 不延迟
+            );
+        }
+
+        for (var entry : shotgunEntries) {
+            BlockEntity be = entry.blockEntity();
+            if (be instanceof ShotgunBaseBlockEntity sb && sb.isAssembled()) {
+                fireSingleShotgun(mc, container, mountedUUID, partialTick, sb);
+            }
         }
     }
 
@@ -191,6 +262,16 @@ public class WeaponOverlay {
         LevelPlot plot = mountedSL.getPlot();
         if (plot == null) {
             return;
+        }
+
+        // 霰弹枪组冷却（回退路径也需检查）
+        boolean shotgunReady = true;
+        boolean sgSoundPlayed = false;
+        if (mc.level != null) {
+            int currentTick = (int) mc.level.getGameTime();
+            if (currentTick - lastShotgunFireTick < SHOTGUN_FIRE_COOLDOWN_TICKS) {
+                shotgunReady = false;
+            }
         }
 
         for (PlotChunkHolder chunk : plot.getLoadedChunks()) {
@@ -207,13 +288,24 @@ public class WeaponOverlay {
                     for (int z = localBounds.minZ(); z <= localBounds.maxZ(); z++) {
                         BlockPos wp = new BlockPos(x + cx, y, z + cz);
                         var be = mc.level.getBlockEntity(wp);
-                        if (!(be instanceof TurretBaseBlockEntity tb)) {
-                            continue;
+                        if (be instanceof TurretBaseBlockEntity tb) {
+                            if (tb.isAssembled()) {
+                                fireSingleTurret(mc, container, mountedUUID, partialTick, tb);
+                            }
+                        } else if (be instanceof ShotgunBaseBlockEntity sb) {
+                            if (sb.isAssembled() && shotgunReady) {
+                                if (!sgSoundPlayed) {
+                                    lastShotgunFireTick = (int) mc.level.getGameTime();
+                                    mc.level.playLocalSound(
+                                            mc.player.getX(), mc.player.getY(), mc.player.getZ(),
+                                            ModSounds.SHOTGUN_FIRE.get(),
+                                            SoundSource.PLAYERS,
+                                            1.5f, 1.0f, false);
+                                    sgSoundPlayed = true;
+                                }
+                                fireSingleShotgun(mc, container, mountedUUID, partialTick, sb);
+                            }
                         }
-                        if (!tb.isAssembled()) {
-                            continue;
-                        }
-                        fireSingleTurret(mc, container, mountedUUID, partialTick, tb);
                     }
                 }
             }
@@ -255,6 +347,105 @@ public class WeaponOverlay {
             IACP.LOGGER.warn("[WeaponOverlay] resolveSubLevelHit 异常: {}", e.getMessage());
         }
         return null;
+    }
+
+    /**
+     * 单霰弹枪开火逻辑：发射 {@value #SHOTGUN_PELLETS} 根射线， 正态分布散布 ±{@value #SHOTGUN_SPREAD_MAX_DEG}°，
+     * 最大射程 {@value #SHOTGUN_MAX_DISTANCE} 格。
+     * <p>
+     * 8 根射线共享同一个枪口原点，各自独立做射线检测、独立发数据包、独立渲染弹道。
+     */
+    private static void fireSingleShotgun(Minecraft mc, SubLevelContainer container,
+            UUID mountedUUID, float partialTick,
+            ShotgunBaseBlockEntity sb) {
+        UUID rodId = sb.getLightningRodSubLevelId();
+        if (rodId == null) {
+            return;
+        }
+        SubLevel sl = container.getSubLevel(rodId);
+        if (!(sl instanceof ClientSubLevel csl) || csl.isRemoved()) {
+            return;
+        }
+        var pose = csl.renderPose(partialTick);
+        if (pose == null) {
+            return;
+        }
+
+        var rodPlot = csl.getPlot();
+        if (rodPlot == null) {
+            return;
+        }
+        BlockPos localBP = rodPlot.getCenterBlock();
+        var localCenter = new Vector3d(localBP.getX() + 0.5, localBP.getY() + 0.5, localBP.getZ() + 0.5);
+        var worldCenter = pose.transformPosition(localCenter);
+        Vec3 origin = new Vec3(worldCenter.x, worldCenter.y, worldCenter.z);
+
+        // 炮管朝向（Z 轴正向旋转到世界空间）
+        Vector3d fwd = new Vector3d(0, 0, 1);
+        fwd.rotate(pose.orientation());
+        Vec3 barrelDir = new Vec3(fwd.x, fwd.y, fwd.z);
+
+        // 准星偏向：将炮管方向拉向玩家瞄准点
+        barrelDir = applyAimBias(barrelDir, origin, lastHitPos);
+        Vec3 dirNorm = barrelDir.normalize();
+
+        // 枪口偏移：沿枪管方向前移，避免弹道起点在炮管内导致自伤
+        Vec3 muzzleOrigin = origin.add(dirNorm.scale(SHOTGUN_MUZZLE_OFFSET));
+
+        // ---- 构建局部坐标系：以枪管方向为 Z 轴，计算垂直向量 ----
+        Vec3 refUp;
+        if (Math.abs(dirNorm.y) < 0.9) {
+            refUp = new Vec3(0, 1, 0).cross(dirNorm).normalize();
+        } else {
+            refUp = new Vec3(1, 0, 0).cross(dirNorm).normalize();
+        }
+        Vec3 right = dirNorm.cross(refUp).normalize();
+        Vec3 up = right.cross(dirNorm).normalize();
+
+        // ---- 发射 8 颗弹丸 ----
+        for (int i = 0; i < SHOTGUN_PELLETS; i++) {
+            // Box-Muller 变换生成正态分布随机数
+            double gauss1 = Math.sqrt(-2 * Math.log(SHOTGUN_RANDOM.nextDouble()))
+                    * Math.cos(2 * Math.PI * SHOTGUN_RANDOM.nextDouble());
+            double gauss2 = Math.sqrt(-2 * Math.log(SHOTGUN_RANDOM.nextDouble()))
+                    * Math.cos(2 * Math.PI * SHOTGUN_RANDOM.nextDouble());
+
+            // 钳位到 ±15°
+            double spreadDegH = clamp(gauss1 * SHOTGUN_SPREAD_SIGMA_DEG,
+                    -SHOTGUN_SPREAD_MAX_DEG, SHOTGUN_SPREAD_MAX_DEG);
+            double spreadDegV = clamp(gauss2 * SHOTGUN_SPREAD_SIGMA_DEG,
+                    -SHOTGUN_SPREAD_MAX_DEG, SHOTGUN_SPREAD_MAX_DEG);
+
+            double spreadRadH = Math.toRadians(spreadDegH);
+            double spreadRadV = Math.toRadians(spreadDegV);
+
+            // 弹丸方向 = 枪管方向 + 水平偏移 + 垂直偏移 → 归一化
+            Vec3 pelletDir = dirNorm
+                    .add(right.scale(spreadRadH))
+                    .add(up.scale(spreadRadV))
+                    .normalize();
+
+            // 从枪口偏移点沿弹丸方向射线检测（最大 100 格）
+            Vec3 hitPos = raycastGeneric(mc, muzzleOrigin, pelletDir, SHOTGUN_MAX_DISTANCE);
+
+            // 弹道渲染（起点为枪口偏移点）
+            activeFires.add(new TurretFireInstance(muzzleOrigin, hitPos));
+
+            // 发数据包到服务端（起点统一为枪口偏移点）
+            SubLevelHit subHit = resolveSubLevelHit(hitPos, mc.level);
+            if (subHit != null) {
+                ModNetworking.sendToServer(new WeaponFireC2SPacket(
+                        muzzleOrigin.x, muzzleOrigin.y, muzzleOrigin.z,
+                        hitPos.x, hitPos.y, hitPos.z,
+                        subHit.uuid(), subHit.localPos()
+                ));
+            } else {
+                ModNetworking.sendToServer(new WeaponFireC2SPacket(
+                        muzzleOrigin.x, muzzleOrigin.y, muzzleOrigin.z,
+                        hitPos.x, hitPos.y, hitPos.z
+                ));
+            }
+        }
     }
 
     /**
@@ -715,5 +906,15 @@ public class WeaponOverlay {
         }
 
         return new Vec3(origin.x + dir.x * t, origin.y + dir.y * t, origin.z + dir.z * t);
+    }
+
+    // ==================================================================
+    //  工具方法
+    // ==================================================================
+    /**
+     * 将值钳位到 [lo, hi] 范围。
+     */
+    private static double clamp(double v, double lo, double hi) {
+        return Math.max(lo, Math.min(hi, v));
     }
 }

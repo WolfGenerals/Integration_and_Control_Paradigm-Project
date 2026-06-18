@@ -26,6 +26,18 @@ public enum AffiliationRole {
      */
     TURRET_PITCH,
     /**
+     * 霰弹枪底座（地毯形方块）
+     */
+    SHOTGUN_BASE,
+    /**
+     * 霰弹枪方向机：砂轮 SubLevel
+     */
+    SHOTGUN_YAW,
+    /**
+     * 霰弹枪高低机：避雷针 SubLevel
+     */
+    SHOTGUN_PITCH,
+    /**
      * 弹射物（预留）：未来子弹/导弹/炮弹
      */
     PROJECTILE,

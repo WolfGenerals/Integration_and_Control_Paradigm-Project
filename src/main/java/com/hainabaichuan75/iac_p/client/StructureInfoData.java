@@ -3,6 +3,8 @@ package com.hainabaichuan75.iac_p.client;
 import com.hainabaichuan75.iac_p.affiliation.ComponentRegistry;
 import com.hainabaichuan75.iac_p.affiliation.ComponentRole;
 import com.hainabaichuan75.iac_p.content.blocks.cockpit.CockpitBlock;
+import com.hainabaichuan75.iac_p.content.blocks.cockpit_light.CockpitLightLinear0Block;
+import com.hainabaichuan75.iac_p.content.blocks.shotgun.ShotgunBaseBlockEntity;
 import com.hainabaichuan75.iac_p.content.blocks.turret.TurretBaseBlockEntity;
 import com.hainabaichuan75.iac_p.events.SubLevelScanner;
 import dev.ryanhcode.sable.sublevel.SubLevel;
@@ -93,7 +95,7 @@ public record StructureInfoData(
             typeCountMap.merge(registryName, 1, Integer::sum);
 
             // 检测驾驶舱
-            if (!foundCockpit[0] && block instanceof CockpitBlock) {
+            if (!foundCockpit[0] && (block instanceof CockpitBlock || block instanceof CockpitLightLinear0Block)) {
                 foundCockpit[0] = true;
             }
         });
@@ -107,33 +109,25 @@ public record StructureInfoData(
         // ====== 2. 武器系统扫描（通过 ComponentRegistry） ======
         List<TurretInfo> turretInfos = new ArrayList<>();
 
+        // 炮塔
         var turretEntries = ComponentRegistry.getComponents(subUUID, ComponentRole.TURRET_BASE);
         for (var entry : turretEntries) {
             BlockEntity be = entry.blockEntity();
             if (be instanceof TurretBaseBlockEntity turret) {
-                BlockPos pos = entry.blockPos();
-                boolean assembled = turret.isAssembled();
-                UUID gsId = turret.getGrindstoneSubLevelId();
-                UUID rodId = turret.getLightningRodSubLevelId();
-                UUID vehId = turret.getVehicleSubLevelId();
+                addTurretInfo(turretInfos, entry.blockPos(), turret.isAssembled(),
+                        turret.getGrindstoneSubLevelId(), turret.getLightningRodSubLevelId(),
+                        turret.getVehicleSubLevelId());
+            }
+        }
 
-                // 生成状态摘要
-                StringBuilder status = new StringBuilder();
-                if (!assembled) {
-                    status.append("§c未装配");
-                } else {
-                    status.append("§a已装配");
-                    List<String> parts = new ArrayList<>();
-                    if (gsId != null) parts.add("砂轮§a✔");
-                    if (rodId != null) parts.add("炮管§a✔");
-                    if (vehId != null) parts.add("车体§a✔");
-                    if (!parts.isEmpty()) {
-                        status.append(" | ");
-                        status.append(String.join(" ", parts));
-                    }
-                }
-
-                turretInfos.add(new TurretInfo(pos, assembled, gsId, rodId, vehId, status.toString()));
+        // 霰弹枪
+        var shotgunEntries = ComponentRegistry.getComponents(subUUID, ComponentRole.SHOTGUN_BASE);
+        for (var entry : shotgunEntries) {
+            BlockEntity be = entry.blockEntity();
+            if (be instanceof ShotgunBaseBlockEntity shotgun) {
+                addTurretInfo(turretInfos, entry.blockPos(), shotgun.isAssembled(),
+                        shotgun.getGrindstoneSubLevelId(), shotgun.getLightningRodSubLevelId(),
+                        shotgun.getVehicleSubLevelId());
             }
         }
 
@@ -144,5 +138,27 @@ public record StructureInfoData(
                 turretInfos,
                 foundCockpit[0]
         );
+    }
+
+    /**
+     * 添加单条武器底座信息到列表（炮塔/霰弹枪共用）。
+     */
+    private static void addTurretInfo(List<TurretInfo> list, BlockPos pos, boolean assembled,
+            UUID gsId, UUID rodId, UUID vehId) {
+        StringBuilder status = new StringBuilder();
+        if (!assembled) {
+            status.append("§c未装配");
+        } else {
+            status.append("§a已装配");
+            List<String> parts = new ArrayList<>();
+            if (gsId != null) parts.add("砂轮§a✔");
+            if (rodId != null) parts.add("炮管§a✔");
+            if (vehId != null) parts.add("车体§a✔");
+            if (!parts.isEmpty()) {
+                status.append(" | ");
+                status.append(String.join(" ", parts));
+            }
+        }
+        list.add(new TurretInfo(pos, assembled, gsId, rodId, vehId, status.toString()));
     }
 }

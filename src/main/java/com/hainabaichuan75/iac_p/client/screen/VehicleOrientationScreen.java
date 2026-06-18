@@ -47,7 +47,9 @@ public class VehicleOrientationScreen extends Screen {
 
     // 按钮引用
     private Button toggleBtn;
+    private Button autoShiftBtn;
     private boolean smartMappingActive;
+    private boolean autoShiftEnabled;
     private String activeSkillId;
 
     // 可用技能列表
@@ -62,12 +64,13 @@ public class VehicleOrientationScreen extends Screen {
     private static final int SKILL_BTN_W = 80;
     private static final int SKILL_BTN_H = 18;
 
-    public VehicleOrientationScreen(VehicleOrientationData data, UUID subLevelUUID, boolean smartMappingActive) {
+    public VehicleOrientationScreen(VehicleOrientationData data, UUID subLevelUUID, boolean smartMappingActive, boolean autoShiftEnabled) {
         super(Component.translatable("screen.iac_p.vehicle_orientation.title"));
         this.data = data;
         this.subLevelUUID = subLevelUUID;
         this.totalSuspensions = data.total();
         this.smartMappingActive = smartMappingActive;
+        this.autoShiftEnabled = autoShiftEnabled;
         this.activeSkillId = ClientMountHandler.getActiveSkillId();
         this.availableSkills = SkillRegistry.getInstance().getAll();
     }
@@ -141,6 +144,18 @@ public class VehicleOrientationScreen extends Screen {
                 .bounds(centerX + 8, statusY, BTN_W, BTN_H)
                 .build());
 
+        // ── 第2.5行：智能变速开关 ──
+        this.autoShiftBtn = this.addRenderableWidget(Button.builder(
+                buildAutoShiftLabel(),
+                btn -> {
+                    sendAction(SmartMapC2SPacket.Action.TOGGLE_AUTO_SHIFT);
+                    autoShiftEnabled = !autoShiftEnabled;
+                    autoShiftBtn.setMessage(buildAutoShiftLabel());
+                }
+        )
+                .bounds(centerX - BTN_W / 2, statusY + BTN_H + 4, BTN_W, BTN_H)
+                .build());
+
         // ── 第3行：关闭按钮 ──
         this.addRenderableWidget(Button.builder(
                 Component.translatable("screen.iac_p.vehicle_orientation.close"),
@@ -173,6 +188,15 @@ public class VehicleOrientationScreen extends Screen {
             return Component.translatable("screen.iac_p.vehicle_orientation.smart_on");
         } else {
             return Component.translatable("screen.iac_p.vehicle_orientation.smart_off");
+        }
+    }
+
+    /** 构建智能变速按钮的文字 */
+    private Component buildAutoShiftLabel() {
+        if (autoShiftEnabled) {
+            return Component.literal("§a⚡ 智能变速 ON");
+        } else {
+            return Component.literal("§7智能变速 OFF");
         }
     }
 

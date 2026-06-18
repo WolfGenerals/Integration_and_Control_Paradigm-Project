@@ -9,8 +9,6 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.sounds.SoundEvents;
-import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.entity.projectile.ProjectileUtil;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.EntityHitResult;
@@ -251,12 +249,6 @@ public class WeaponFireC2SPacket implements CustomPacketPayload {
                     net.minecraft.core.particles.ParticleTypes.CRIT,
                     hitPos.x, hitPos.y, hitPos.z,
                     6, 0.2, 0.2, 0.2, 0.1);
-            level.playSound(null, player.getX(), player.getY(), player.getZ(),
-                    SoundEvents.EGG_THROW,
-                    SoundSource.PLAYERS, 0.8f, 1.0f);
-            level.playSound(null, player.getX(), player.getY(), player.getZ(),
-                    SoundEvents.SNOWBALL_THROW, SoundSource.PLAYERS,
-                    1.0f, 1.0f);
         });
     }
 

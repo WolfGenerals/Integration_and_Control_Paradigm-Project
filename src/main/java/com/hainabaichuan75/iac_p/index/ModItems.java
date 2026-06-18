@@ -19,6 +19,13 @@ public class ModItems {
      */
     public static final DeferredItem<BlockItem> COCKPIT = ITEMS.registerSimpleBlockItem(ModBlocks.COCKPIT);
 
+    // === 轻型线性座舱（仅种子方块有物品，结构子块无物品） ===
+    public static final DeferredItem<BlockItem> COCKPIT_LIGHT_LINEAR_0 =
+            ITEMS.registerSimpleBlockItem(ModBlocks.COCKPIT_LIGHT_LINEAR_0);
+
+    // === 霰弹枪底座方块 ===
+    public static final DeferredItem<BlockItem> SHOTGUN_BASE = ITEMS.registerSimpleBlockItem(ModBlocks.SHOTGUN_BASE);
+
     // === 炮塔底座方块 ===
     public static final DeferredItem<BlockItem> TURRET_BASE = ITEMS.registerSimpleBlockItem(ModBlocks.TURRET_BASE);
 

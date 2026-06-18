@@ -4,6 +4,7 @@ import com.hainabaichuan75.iac_p.IACP;
 import com.hainabaichuan75.iac_p.affiliation.ComponentHost;
 import com.hainabaichuan75.iac_p.affiliation.ComponentRegistry;
 import com.hainabaichuan75.iac_p.affiliation.ComponentRole;
+import com.hainabaichuan75.iac_p.content.blocks.suspension_test.SuspensionConstants;
 import com.hainabaichuan75.iac_p.content.blocks.suspension_test.SuspensionTestBlock;
 import com.hainabaichuan75.iac_p.content.blocks.suspension_test.SuspensionTestBlockEntity;
 import com.hainabaichuan75.iac_p.events.SubLevelScanner;
@@ -94,6 +95,9 @@ public class CockpitBlockEntity extends SmartBlockEntity implements ComponentHos
 
     /** 智能映射启用 */
     private boolean smartMappingActive = false;
+
+    /** 智能变速启用。开启后发动力不足时自动降档到 1 档。 */
+    private boolean autoShiftEnabled = false;
 
     /** 当前驾驶技能 ID */
     private String activeSkillId = com.hainabaichuan75.iac_p.skill.SkillRegistry.DEFAULT_SKILL_ID;
@@ -200,6 +204,16 @@ public class CockpitBlockEntity extends SmartBlockEntity implements ComponentHos
     }
 
     /**
+     * 直接降档到 1 档（智能变速用）。
+     * <p>
+     * 跳过逐级降档，直接设定目标档位为 1。同样有 6 tick 换挡真空期。
+     */
+    public void shiftToFirst() {
+        if (isShifting || currentGear <= 1) return;
+        startShiftSequence(1);
+    }
+
+    /**
      * @return 当前档位：-1=R, 0=N, 1-5=前进档
      */
     public int getCurrentGear() {
@@ -237,6 +251,16 @@ public class CockpitBlockEntity extends SmartBlockEntity implements ComponentHos
 
     public void setSmartMappingActive(boolean active) {
         this.smartMappingActive = active;
+        setChanged();
+        sendData();
+    }
+
+    public boolean isAutoShiftEnabled() {
+        return autoShiftEnabled;
+    }
+
+    public void setAutoShiftEnabled(boolean enabled) {
+        this.autoShiftEnabled = enabled;
         setChanged();
         sendData();
     }
@@ -342,6 +366,20 @@ public class CockpitBlockEntity extends SmartBlockEntity implements ComponentHos
 
     /** 状态同步包冷却计数器（每 2 tick 向客户端推送一次实时状态） */
     private int stateSyncCooldown = 0;
+    /** 上次同步时的速度（m/s），用于加速度差分计算 */
+    private double lastSyncSpeedMs = 0;
+    /** 最近计算的加速度（m/s²），供自动变速逻辑和覆盖层使用 */
+    private double currentAccelMs2 = 0;
+
+    // ── 自动变速 ──
+    /** 升档节流计数器（每 10 tick 检查一次） */
+    private int upshiftTimer = 0;
+    /** 上次升档检查时的速度（m/s） */
+    private double lastUpshiftSpeed = 0;
+    /** 降档持续计时器（速度比连续 N tick < 阈值才降，防转弯误触发） */
+    private int downshiftStallTimer = 0;
+    /** 上次换挡的游戏刻（升档在此 tick 内不触发，防升降档振荡） */
+    private int lastShiftTick = 0;
 
     // ── 换挡状态 ──
     /** 是否正在换挡（动力中断期间）。期间 torquePerWheel = 0，发动机空载运行。 */
@@ -394,6 +432,10 @@ public class CockpitBlockEntity extends SmartBlockEntity implements ComponentHos
                                     this.worldPosition.getZ() + 0.5));
                     if (vel != null) speedMs = vel.length();
                 } catch (Exception ignored) { }
+                // 加速度 = 速度差分 / 时间间隔（2 tick = 0.1s）
+                double accelMs2 = (speedMs - this.lastSyncSpeedMs) / 0.1;
+                this.lastSyncSpeedMs = speedMs;
+                this.currentAccelMs2 = Math.abs(accelMs2);
                 var subLevel = dev.ryanhcode.sable.Sable.HELPER.getContaining(this);
                 if (subLevel != null) {
                     var player = com.hainabaichuan75.iac_p.events.PlayerMountTracker.getPlayerForSubLevel(
@@ -407,6 +449,7 @@ public class CockpitBlockEntity extends SmartBlockEntity implements ComponentHos
                                         this.stalled,
                                         this.effectiveTorque,
                                         speedMs,
+                                        accelMs2,
                                         this.isShifting
                                 ));
                     }
@@ -471,6 +514,82 @@ public class CockpitBlockEntity extends SmartBlockEntity implements ComponentHos
                 int wheelCount = Math.max(wheels.wheelCount, 1);
                 var gbOut = TransmissionModel.computeOutput(result.engineTorque(), result.rpm(), this.currentGear);
                 this.torquePerWheel = gbOut.torqueB() / wheelCount;
+
+                // ═══ 憋住救急 ═══
+                // 静止踩油门下直接跳 1 档（无换挡真空期），不等逐级降档。
+                // 适用场景：5 档 100% 油门憋在原地起不来。
+                if (autoShiftEnabled && currentGear > 1 && hasAnyThrottleInput(sl)) {
+                    double curSpeed = Math.abs(wheels.avgWheelRpm()) * Math.PI * 2.0 / 60.0 * 0.5;
+                    if (curSpeed < 0.5) {
+                        IACP.LOGGER.info("[Cockpit] 憋住救急: 瞬跳 1 档 (gear={})", currentGear);
+                        this.currentGear = 1;
+                        this.isShifting = false;
+                        this.shiftingTimer = 0;
+                        this.targetShiftGear = 0;
+                        this.revMatchTargetRpm = 0;
+                        setChanged();
+                        sendData();
+                    }
+                }
+
+                // ═══ 自动降档 ═══
+                // 刚换挡后 40 tick (2s) 内不降，防升降档振荡。
+                // 转向时不降档。降档条件：当前速度 < 低一档在当前 RPM 下的理想速度。
+                // 物理含义：你跑得比低档应有的速度还慢 → 当前档位太高了。
+                if (autoShiftEnabled && !isShifting && currentGear >= 2
+                        && this.throttleLevel > 0.3 && hasAnyThrottleInput(sl)
+                        && !hasAnySteeringInput(sl)) {
+                    int gameTime = this.level == null ? 0 : (int)this.level.getGameTime();
+                    if (gameTime - this.lastShiftTick > 40) {
+                        double currentSpeed = Math.abs(wheels.avgWheelRpm()) * Math.PI * 2.0 / 60.0 * 0.5;
+                        double prevIdealRpm = TransmissionModel.computeTargetWheelRpm(
+                                currentGear - 1, this.engineRpm);
+                        double prevIdealSpeed = Math.abs(prevIdealRpm) * Math.PI * 2.0 / 60.0 * 0.5;
+                        if (currentSpeed < prevIdealSpeed && currentSpeed > 0.5) {
+                            IACP.LOGGER.info("[Cockpit] 自动降档: {}→{} (speed {} < ideal({}) {})",
+                                    currentGear, currentGear - 1,
+                                    String.format("%.1f", currentSpeed),
+                                    currentGear - 1,
+                                    String.format("%.1f", prevIdealSpeed));
+                            gearDown();
+                            this.lastShiftTick = gameTime;
+                        }
+                    }
+                }
+
+                // ═══ 自动升档 ═══
+                // 每 10 tick 检查。刚降档后 30 tick 内不升（防振荡）。
+                if (autoShiftEnabled && !isShifting && currentGear >= 1
+                        && currentGear < PowertrainConstants.NUM_FORWARD_GEARS) {
+                    int gameTime = this.level == null ? 0 : (int)this.level.getGameTime();
+                    if (gameTime - this.lastShiftTick > 30 && ++this.upshiftTimer >= 10) {
+                        this.upshiftTimer = 0;
+                        double nowSpeed = 0;
+                        try {
+                            org.joml.Vector3d vel = dev.ryanhcode.sable.Sable.HELPER.getVelocity(
+                                    level, new org.joml.Vector3d(
+                                            this.worldPosition.getX() + 0.5,
+                                            this.worldPosition.getY() + 0.5,
+                                            this.worldPosition.getZ() + 0.5));
+                            if (vel != null) nowSpeed = vel.length();
+                        } catch (Exception ignored) { }
+                        double accel = Math.abs(nowSpeed - this.lastUpshiftSpeed) / 0.5;
+                        this.lastUpshiftSpeed = nowSpeed;
+                        double prevTargetRpm = TransmissionModel.computeTargetWheelRpm(
+                                currentGear - 1, this.engineRpm);
+                        double prevIdealSpeed = Math.abs(prevTargetRpm) * Math.PI * 2.0 / 60.0 * 0.5;
+                        if (accel < 1.0 && nowSpeed > prevIdealSpeed && nowSpeed > 0.5) {
+                            IACP.LOGGER.info("[Cockpit] 自动升档: {}→{} (accel={}, speed={})",
+                                    currentGear, currentGear + 1,
+                                    String.format("%.2f", accel),
+                                    String.format("%.1f", nowSpeed));
+                            gearUp();
+                            this.lastShiftTick = gameTime;
+                        }
+                    }
+                } else {
+                    this.upshiftTimer = 0;
+                }
             }
         }
     }
@@ -536,6 +655,43 @@ public class CockpitBlockEntity extends SmartBlockEntity implements ComponentHos
         return new WheelScanResult(avgRpm, count[0]);
     }
 
+    /**
+     * 检查是否有任何悬挂方块有驱动输入（W/S 按下）。
+     * 用于智能变速的判断条件。
+     */
+    private boolean hasAnyThrottleInput(SubLevel sl) {
+        UUID subUUID = sl.getUniqueId();
+        var entries = ComponentRegistry.getComponents(subUUID, ComponentRole.SUSPENSION);
+        if (!entries.isEmpty()) {
+            for (var entry : entries) {
+                if (entry.blockEntity() instanceof SuspensionTestBlockEntity sbe) {
+                    if (sbe.hasThrottle()) return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** 检查是否有任何悬挂方块有转向输入（A/D 按下）。
+     *  转向时不自动降档，防止转弯掉速度误触发。 */
+    private boolean hasAnySteeringInput(SubLevel sl) {
+        UUID subUUID = sl.getUniqueId();
+        var entries = ComponentRegistry.getComponents(subUUID, ComponentRole.SUSPENSION);
+        if (!entries.isEmpty()) {
+            for (var entry : entries) {
+                if (entry.blockEntity() instanceof SuspensionTestBlockEntity sbe) {
+                    if (Math.abs(sbe.getTargetSteeringYaw()) > 0.01) return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** @return 当前加速度绝对值（m/s²），由状态同步段每 2 tick 更新 */
+    private double getCurrentAccel() {
+        return this.currentAccelMs2;
+    }
+
     // ====================================================================
     //  NBT 持久化 & 同步
     // ====================================================================
@@ -547,6 +703,7 @@ public class CockpitBlockEntity extends SmartBlockEntity implements ComponentHos
     private static final String TAG_THROTTLE_LEVEL = "ThrottleLevel";
     private static final String TAG_EFFECTIVE_TORQUE = "EffectiveTorque";
     private static final String TAG_SMART_MAPPING = "SmartMappingActive";
+    private static final String TAG_AUTO_SHIFT = "AutoShiftEnabled";
     private static final String TAG_SKILL_ID = "ActiveSkillId";
     private static final String TAG_STALLED = "Stalled";
 
@@ -558,6 +715,7 @@ public class CockpitBlockEntity extends SmartBlockEntity implements ComponentHos
         tag.putDouble(TAG_THROTTLE_LEVEL, this.throttleLevel);
         tag.putDouble(TAG_EFFECTIVE_TORQUE, this.effectiveTorque);
         tag.putBoolean(TAG_SMART_MAPPING, this.smartMappingActive);
+        tag.putBoolean(TAG_AUTO_SHIFT, this.autoShiftEnabled);
         tag.putString(TAG_SKILL_ID, this.activeSkillId);
         tag.putBoolean(TAG_STALLED, this.stalled);
     }
@@ -572,6 +730,7 @@ public class CockpitBlockEntity extends SmartBlockEntity implements ComponentHos
         if (tag.contains(TAG_THROTTLE_LEVEL)) this.throttleLevel = tag.getDouble(TAG_THROTTLE_LEVEL);
         if (tag.contains(TAG_EFFECTIVE_TORQUE)) this.effectiveTorque = tag.getDouble(TAG_EFFECTIVE_TORQUE);
         if (tag.contains(TAG_SMART_MAPPING)) this.smartMappingActive = tag.getBoolean(TAG_SMART_MAPPING);
+        if (tag.contains(TAG_AUTO_SHIFT)) this.autoShiftEnabled = tag.getBoolean(TAG_AUTO_SHIFT);
         if (tag.contains(TAG_SKILL_ID)) this.activeSkillId = tag.getString(TAG_SKILL_ID);
         if (tag.contains(TAG_STALLED)) this.stalled = tag.getBoolean(TAG_STALLED);
     }

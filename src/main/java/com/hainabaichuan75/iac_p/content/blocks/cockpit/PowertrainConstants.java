@@ -53,8 +53,9 @@ public final class PowertrainConstants {
     public static final double ENGINE_INERTIA = 0.3;
 
     /** 基础发动机扭矩（Nm）。经扭矩曲线修正后的峰值扭矩。
-     *  与车辆质量解耦——轻车加速快、重车加速慢，天然产生驾驶差异。 */
-    public static final double ENGINE_TORQUE = 200.0;
+     *  与车辆质量解耦——轻车加速快、重车加速慢，天然产生驾驶差异。
+     *  120kg 测试车配 4 轮：20 Nm 峰值 → 怠速 16 Nm → 驱动平稳。 */
+    public static final double ENGINE_TORQUE = 5;
 
     // ====================================================================
     //  扭矩曲线参数
@@ -113,8 +114,8 @@ public final class PowertrainConstants {
 
     /** 怠速维持扭矩（Nm）。
      *  无油门输入且引擎RPM接近怠速时，提供此最小扭矩防止熄火。
-     *  取值 25 Nm ≈ 引擎在 800 RPM 下克服自身摩擦所需的最小扭矩。 */
-    public static final double IDLE_MAINTAIN_TORQUE = 25.0;
+     *  取值 16 Nm = 峰值 20 Nm × 扭矩曲线怠速比例 0.80，精确匹配无额外拧。 */
+    public static final double IDLE_MAINTAIN_TORQUE = 4;
 
     // ====================================================================
     //  换挡参数

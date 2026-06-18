@@ -1,0 +1,8 @@
+{
+  "variants": {
+    "facing=north": { "model": "iac_p:block/cockpit_light_linear_0" },
+    "facing=east":  { "model": "iac_p:block/cockpit_light_linear_0", "y": 90 },
+    "facing=south": { "model": "iac_p:block/cockpit_light_linear_0", "y": 180 },
+    "facing=west":  { "model": "iac_p:block/cockpit_light_linear_0", "y": 270 }
+  }
+}

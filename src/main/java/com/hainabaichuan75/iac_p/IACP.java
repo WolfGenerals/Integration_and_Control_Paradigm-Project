@@ -14,6 +14,8 @@ import com.hainabaichuan75.iac_p.index.ModDebugGearBlockEntityTypes;
 import com.hainabaichuan75.iac_p.index.ModDebugSwivelBearingBlockEntityTypes;
 import com.hainabaichuan75.iac_p.index.ModEntities;
 import com.hainabaichuan75.iac_p.index.ModItems;
+import com.hainabaichuan75.iac_p.index.ModLightCockpitBlockEntityTypes;
+import com.hainabaichuan75.iac_p.index.ModSounds;
 import org.slf4j.Logger;
 
 import com.mojang.logging.LogUtils;
@@ -41,7 +43,9 @@ public class IACP {
         ModCockpitBlockEntityTypes.BLOCK_ENTITY_TYPES.register(modEventBus);
         ModDebugGearBlockEntityTypes.BLOCK_ENTITY_TYPES.register(modEventBus);
         ModDebugSwivelBearingBlockEntityTypes.BLOCK_ENTITY_TYPES.register(modEventBus);
+        ModLightCockpitBlockEntityTypes.BLOCK_ENTITY_TYPES.register(modEventBus);
         ModCreativeModeTabs.register(modEventBus);
+        ModSounds.SOUND_EVENTS.register(modEventBus);
 
         // 将服务端事件处理器注册到游戏总线（替代弃用的 @EventBusSubscriber(bus = Bus.GAME)）
         NeoForge.EVENT_BUS.register(PlayerMountTracker.class);

@@ -27,9 +27,10 @@ import net.neoforged.neoforge.network.handling.IPayloadContext;
  * @param throttleLevel   油门踏板深度 [0.0, 1.0]
  * @param currentGear     当前档位（-1=R, 0=N, 1-5=前进）
  * @param stalled         发动机是否熄火
- * @param effectiveTorque 引擎输出扭矩（Nm），含扭矩曲线修正 × 油门，不含离合器/摩擦扣减
- * @param vehicleSpeedMs  载具当前速度（m/s），来自 Sable 物理引擎
- * @param isShifting      是否正在换挡（动力中断期间）
+ * @param effectiveTorque 引擎输出扭矩（Nm），含扭矩曲线修正 × 油门
+ * @param vehicleSpeedMs  载具当前速度（m/s）
+ * @param vehicleAccelMs2 载具当前加速度（m/s²），速度差分计算
+ * @param isShifting      是否正在换挡
  */
 public record VehicleStateS2CPacket(
         double engineRpm,
@@ -38,6 +39,7 @@ public record VehicleStateS2CPacket(
         boolean stalled,
         double effectiveTorque,
         double vehicleSpeedMs,
+        double vehicleAccelMs2,
         boolean isShifting
 ) implements CustomPacketPayload {
 
@@ -55,6 +57,7 @@ public record VehicleStateS2CPacket(
                             buf.readBoolean(),  // stalled
                             buf.readDouble(),   // effectiveTorque
                             buf.readDouble(),   // vehicleSpeedMs
+                            buf.readDouble(),   // vehicleAccelMs2
                             buf.readBoolean()   // isShifting
                     );
                 }
@@ -67,6 +70,7 @@ public record VehicleStateS2CPacket(
                     buf.writeBoolean(packet.stalled);
                     buf.writeDouble(packet.effectiveTorque);
                     buf.writeDouble(packet.vehicleSpeedMs);
+                    buf.writeDouble(packet.vehicleAccelMs2);
                     buf.writeBoolean(packet.isShifting);
                 }
             };
@@ -89,6 +93,7 @@ public record VehicleStateS2CPacket(
                     packet.stalled,
                     packet.effectiveTorque,
                     packet.vehicleSpeedMs,
+                    packet.vehicleAccelMs2,
                     packet.isShifting
             );
         });

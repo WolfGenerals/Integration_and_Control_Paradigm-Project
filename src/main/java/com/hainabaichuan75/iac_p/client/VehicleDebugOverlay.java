@@ -56,6 +56,8 @@ public class VehicleDebugOverlay {
     private static double mass = 0;
     private static double idealSpeedMs = 0;
     private static double currentSpeedMs = 0;
+    /** 载具加速度（m/s²） */
+    private static double currentAccelMs2 = 0;
     private static double frictionPct = 0;
     /** 力需求/摩擦预算比率（可 > 100%，表示打滑程度） */
     private static double frictionDemandRatio = 0;
@@ -239,6 +241,8 @@ public class VehicleDebugOverlay {
         } else {
             currentSpeedMs = 0;
         }
+        // 加速度：从服务端同步缓存读取（速度差分计算）
+        currentAccelMs2 = ClientMountHandler.getCachedVehicleAccelMs2();
 
         // 质量：优先使用服务端同步的实际物理质量，降级使用固定估算值
         // 降级路径移除了全量扫描（服务端始终在 mount 时同步 mass，降级极少触发）
@@ -302,6 +306,7 @@ public class VehicleDebugOverlay {
             displayLines.add(line("debug.iac_p.overlay.tire_avg",    String.format("%,.0f RPM  |  %.1f Nm/轮", avgWheelRpm, avgWheelTorque)));
             displayLines.add(line("debug.iac_p.overlay.ideal_speed", String.format("%.2f m/s", idealSpeedMs)));
             displayLines.add(line("debug.iac_p.overlay.current_speed", String.format("%.2f m/s  (%.1f km/h)", currentSpeedMs, currentSpeedMs * 3.6)));
+            displayLines.add(Component.literal("§7加速度: §f%+.2f m/s²".formatted(currentAccelMs2)));
             displayLines.add(line("debug.iac_p.overlay.friction_demand", String.format("%.0f%%", frictionPct)));
 
             // ── 输入调试 ──

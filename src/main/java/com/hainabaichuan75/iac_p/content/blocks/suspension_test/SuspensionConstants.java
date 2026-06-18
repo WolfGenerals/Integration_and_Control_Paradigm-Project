@@ -124,6 +124,8 @@ public final class SuspensionConstants {
     // ---- 转向参数 ----
     /** 最大转向角（度）。左正右负。 */
     public static final double MAX_STEERING_ANGLE = 30.0;
+    /** 最小转向角（度）。高速时限制到此值防止失控。 */
+    public static final double MIN_STEERING_ANGLE = 10.0;
     /** 转向速率（度/tick）。 */
     public static final double STEERING_SPEED = 10;
     /** 是否自动归正。true = 无转向输入时自动回中。 */

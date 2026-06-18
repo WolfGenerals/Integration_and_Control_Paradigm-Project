@@ -3,6 +3,7 @@ package com.hainabaichuan75.iac_p.network.packets;
 import com.hainabaichuan75.iac_p.IACP;
 import com.hainabaichuan75.iac_p.affiliation.ComponentRegistry;
 import com.hainabaichuan75.iac_p.affiliation.ComponentRole;
+import com.hainabaichuan75.iac_p.content.blocks.shotgun.ShotgunBaseBlockEntity;
 import com.hainabaichuan75.iac_p.content.blocks.turret.TurretAimController;
 import com.hainabaichuan75.iac_p.content.blocks.turret.TurretBaseBlockEntity;
 import com.hainabaichuan75.iac_p.events.PlayerMountTracker;
@@ -129,6 +130,23 @@ public record TurretTargetC2SPacket(
     }
 
     /**
+     * 驱动单座霰弹枪瞄准目标点 —— 与炮塔相同的局部空间计算。
+     */
+    private static void driveShotgunAtTarget(ShotgunBaseBlockEntity sb,
+            Vector3d hitLocal, Vector3d weaponLocal) {
+        double dx = hitLocal.x - weaponLocal.x;
+        double dy = hitLocal.y - weaponLocal.y;
+        double dz = hitLocal.z - weaponLocal.z;
+        double horiz = Math.sqrt(dx * dx + dz * dz);
+
+        float yaw = horiz < 0.001 ? 0f
+                : (float) -Math.toDegrees(Math.atan2(dx, dz));
+        float pitch = (float) Math.toDegrees(Math.atan2(dy, Math.max(horiz, 0.001)));
+
+        com.hainabaichuan75.iac_p.content.blocks.shotgun.ShotgunAimController.driveAnglesImmediate(sb, yaw, pitch);
+    }
+
+    /**
      * 服务端处理：将命中点 + 每座炮塔坐标变换到载具局部空间后计算角度。
      * <p>
      * 载具局部空间计算的优势：
@@ -179,28 +197,52 @@ public record TurretTargetC2SPacket(
             var hitLocal = worldToLocal(vPose, vOrientInv, hitX, hitY, hitZ);
 
             // ---- 首选：ComponentRegistry O(1) 查找 ----
+            // 炮塔（Turret）
             var turretEntries = ComponentRegistry.getComponents(vehicleUUID, ComponentRole.TURRET_BASE);
-            if (!turretEntries.isEmpty()) {
-                for (var entry : turretEntries) {
-                    if (!(entry.blockEntity() instanceof TurretBaseBlockEntity tb)) {
-                        continue;
-                    }
-                    if (!tb.isAssembled()) {
-                        continue;
-                    }
-                    // 获取炮塔（砂轮）位置并变换到载具局部空间
-                    SubLevel gsSL = container.getSubLevel(tb.getGrindstoneSubLevelId());
-                    if (gsSL == null || gsSL.isRemoved()) {
-                        continue;
-                    }
-                    var gsPose = gsSL.logicalPose();
-                    if (gsPose == null) {
-                        continue;
-                    }
-                    var turretLocal = worldToLocal(vPose, vOrientInv,
-                            gsPose.position().x(), gsPose.position().y(), gsPose.position().z());
-                    driveTurretAtTarget(tb, hitLocal, turretLocal);
+            for (var entry : turretEntries) {
+                if (!(entry.blockEntity() instanceof TurretBaseBlockEntity tb)) {
+                    continue;
                 }
+                if (!tb.isAssembled()) {
+                    continue;
+                }
+                SubLevel gsSL = container.getSubLevel(tb.getGrindstoneSubLevelId());
+                if (gsSL == null || gsSL.isRemoved()) {
+                    continue;
+                }
+                var gsPose = gsSL.logicalPose();
+                if (gsPose == null) {
+                    continue;
+                }
+                var turretLocal = worldToLocal(vPose, vOrientInv,
+                        gsPose.position().x(), gsPose.position().y(), gsPose.position().z());
+                driveTurretAtTarget(tb, hitLocal, turretLocal);
+            }
+
+            // 霰弹枪（Shotgun）
+            var shotgunEntries = ComponentRegistry.getComponents(vehicleUUID, ComponentRole.SHOTGUN_BASE);
+            for (var entry : shotgunEntries) {
+                if (!(entry.blockEntity() instanceof ShotgunBaseBlockEntity sb)) {
+                    continue;
+                }
+                if (!sb.isAssembled()) {
+                    continue;
+                }
+                SubLevel gsSL = container.getSubLevel(sb.getGrindstoneSubLevelId());
+                if (gsSL == null || gsSL.isRemoved()) {
+                    continue;
+                }
+                var gsPose = gsSL.logicalPose();
+                if (gsPose == null) {
+                    continue;
+                }
+                var weaponLocal = worldToLocal(vPose, vOrientInv,
+                        gsPose.position().x(), gsPose.position().y(), gsPose.position().z());
+                driveShotgunAtTarget(sb, hitLocal, weaponLocal);
+            }
+
+            // 如果注册表中找到武器条目，跳过回退扫描
+            if (!turretEntries.isEmpty() || !shotgunEntries.isEmpty()) {
                 return;
             }
 
@@ -222,16 +264,19 @@ public record TurretTargetC2SPacket(
                         for (int z = localBounds.minZ(); z <= localBounds.maxZ(); z++) {
                             BlockPos wp = new BlockPos(x + cMinX, y, z + cMinZ);
                             BlockEntity be = level.getBlockEntity(wp);
-                            if (!(be instanceof TurretBaseBlockEntity tb)) {
-                                continue;
+                            if (be instanceof TurretBaseBlockEntity tb) {
+                                if (tb.isAssembled()) {
+                                    var weaponLocal = worldToLocal(vPose, vOrientInv,
+                                            wp.getX() + 0.5, wp.getY() + 0.5, wp.getZ() + 0.5);
+                                    driveTurretAtTarget(tb, hitLocal, weaponLocal);
+                                }
+                            } else if (be instanceof ShotgunBaseBlockEntity sb) {
+                                if (sb.isAssembled()) {
+                                    var weaponLocal = worldToLocal(vPose, vOrientInv,
+                                            wp.getX() + 0.5, wp.getY() + 0.5, wp.getZ() + 0.5);
+                                    driveShotgunAtTarget(sb, hitLocal, weaponLocal);
+                                }
                             }
-                            if (!tb.isAssembled()) {
-                                continue;
-                            }
-                            // 地毯位置也在载具局部空间计算
-                            var turretLocal = worldToLocal(vPose, vOrientInv,
-                                    wp.getX() + 0.5, wp.getY() + 0.5, wp.getZ() + 0.5);
-                            driveTurretAtTarget(tb, hitLocal, turretLocal);
                         }
                     }
                 }
