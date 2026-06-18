@@ -1,6 +1,7 @@
 package com.hainabaichuan75.iac_p.network.packets;
 
 import com.hainabaichuan75.iac_p.IACP;
+import com.hainabaichuan75.iac_p.content.blocks.shotgun.ShotgunBaseBlockEntity;
 import com.hainabaichuan75.iac_p.content.blocks.turret.TurretBaseBlockEntity;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.RegistryFriendlyByteBuf;
@@ -46,23 +47,37 @@ public record AnchorConfigC2SPacket(UUID subLevelUUID, double x, double y, doubl
                 Level level = sp.serverLevel();
                 UUID uuid = packet.subLevelUUID;
 
-                // 查砂轮注册表找到底座
+                // 查砂轮注册表找到底座（炮塔）
                 BlockPos ownerPos = TurretBaseBlockEntity.findOwnerByGrindstoneUUID(uuid);
                 if (ownerPos == null) {
-                    // 也查避雷针注册表（用户可能对避雷针打开配置）
                     ownerPos = TurretBaseBlockEntity.findOwnerByRodUUID(uuid);
                 }
                 if (ownerPos != null) {
                     BlockEntity be = level.getBlockEntity(ownerPos);
                     if (be instanceof TurretBaseBlockEntity turret) {
                         turret.setAnchor(packet.x, packet.y, packet.z);
-                        IACP.LOGGER.info("[AnchorConfig] 锚点A -> ({}, {}, {}) (底座 @ {})",
+                        IACP.LOGGER.info("[AnchorConfig] 炮塔锚点A -> ({}, {}, {}) (底座 @ {})",
                                 packet.x, packet.y, packet.z, ownerPos);
                         return;
                     }
                 }
 
-                IACP.LOGGER.warn("[AnchorConfig] 未找到拥有 SubLevel {} 的 TurretBase", uuid);
+                // 查霰弹枪注册表
+                ownerPos = ShotgunBaseBlockEntity.findOwnerByGrindstoneUUID(uuid);
+                if (ownerPos == null) {
+                    ownerPos = ShotgunBaseBlockEntity.findOwnerByRodUUID(uuid);
+                }
+                if (ownerPos != null) {
+                    BlockEntity be = level.getBlockEntity(ownerPos);
+                    if (be instanceof ShotgunBaseBlockEntity shotgun) {
+                        shotgun.setAnchor(packet.x, packet.y, packet.z);
+                        IACP.LOGGER.info("[AnchorConfig] 霰弹枪锚点A -> ({}, {}, {}) (底座 @ {})",
+                                packet.x, packet.y, packet.z, ownerPos);
+                        return;
+                    }
+                }
+
+                IACP.LOGGER.warn("[AnchorConfig] 未找到拥有 SubLevel {} 的武器底座", uuid);
             }
         });
     }

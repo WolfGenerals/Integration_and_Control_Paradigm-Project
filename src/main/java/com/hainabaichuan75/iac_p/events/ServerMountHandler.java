@@ -203,7 +203,8 @@ public class ServerMountHandler {
     private static BlockPos findCockpitBlockInSubLevel(SubLevel subLevel, ServerLevel level) {
         final BlockPos[] result = {null};
         SubLevelScanner.forEachBlock(subLevel, level, (worldPos, state, be) -> {
-            if (result[0] == null && (state.is(ModBlocks.COCKPIT.get()) || state.is(ModBlocks.SEAT.get()))) {
+            if (result[0] == null && (state.is(ModBlocks.COCKPIT.get()) || state.is(ModBlocks.SEAT.get())
+                    || state.is(ModBlocks.COCKPIT_LIGHT_LINEAR_0.get()))) {
                 result[0] = worldPos;
             }
         });

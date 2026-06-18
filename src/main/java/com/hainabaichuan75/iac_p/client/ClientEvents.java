@@ -5,6 +5,7 @@ import com.hainabaichuan75.iac_p.client.screen.StructureInfoScreen;
 import com.hainabaichuan75.iac_p.client.screen.VehicleKeyConfigScreen;
 import com.hainabaichuan75.iac_p.client.screen.VehicleOrientationScreen;
 import com.hainabaichuan75.iac_p.content.blocks.cockpit.CockpitBlock;
+import com.hainabaichuan75.iac_p.content.blocks.cockpit_light.CockpitLightLinear0Block;
 import com.hainabaichuan75.iac_p.content.blocks.debug_gear.DebugGearBlock;
 import com.hainabaichuan75.iac_p.content.blocks.debug_swivel.DebugSwivelBearingBlock;
 import com.hainabaichuan75.iac_p.content.blocks.suspension_test.SuspensionTestBlock;
@@ -269,7 +270,7 @@ public class ClientEvents {
 
             BlockPos hitPos = hitResult.getBlockPos();
             BlockState hitState = mc.level.getBlockState(hitPos);
-            if (!(hitState.getBlock() instanceof CockpitBlock)) {
+            if (!(hitState.getBlock() instanceof CockpitBlock || hitState.getBlock() instanceof CockpitLightLinear0Block)) {
                 return false;
             }
 
@@ -279,10 +280,17 @@ public class ClientEvents {
                 return false;
             }
 
-            // 扫描并缓存朝向数据
+            // 扫描并缓存朝向数据（非骑乘时首次扫描）
             ClientMountHandler.scanOrientation(targetSubLevel, mc.level);
-            ClientMountHandler.syncSmartMappingState(targetSubLevel, mc.level);
+        } else {
+            // 已上车：刷新朝向缓存（骑乘过程中结构可能变化）
+            ClientMountHandler.scanOrientation(targetSubLevel, mc.level);
         }
+
+        // ═══ 统一刷新智能映射状态 ═══
+        // 无论上车/下车路径，都从客户端 BE 的 NBT 重新读取最新状态，
+        // 消除缓存滞后（如上车后服务端切换了智能映射，但缓存还是上车时的值）。
+        ClientMountHandler.syncSmartMappingState(targetSubLevel, mc.level);
 
         if (targetSubLevel == null) {
             return false;
@@ -291,7 +299,8 @@ public class ClientEvents {
         // 打开朝向信息界面（交互式，含汽车模式/反转/开关按钮）
         VehicleOrientationData data = ClientMountHandler.getOrientationData(targetSubLevel.getUniqueId());
         boolean smartOn = ClientMountHandler.isSmartMappingActive();
-        mc.setScreen(new VehicleOrientationScreen(data, targetSubLevel.getUniqueId(), smartOn));
+        boolean autoOn = ClientMountHandler.isAutoShiftEnabled();
+        mc.setScreen(new VehicleOrientationScreen(data, targetSubLevel.getUniqueId(), smartOn, autoOn));
         return true;
     }
 
@@ -336,7 +345,7 @@ public class ClientEvents {
 
             BlockPos hitPos = hitResult.getBlockPos();
             BlockState hitState = mc.level.getBlockState(hitPos);
-            if (!(hitState.getBlock() instanceof CockpitBlock)) {
+            if (!(hitState.getBlock() instanceof CockpitBlock || hitState.getBlock() instanceof CockpitLightLinear0Block)) {
                 return false;
             }
 
@@ -385,7 +394,7 @@ public class ClientEvents {
     }
 
     /**
-     * 尝试打开炮塔部件（砂轮/避雷针）朝向配置界面。
+     * 尝试打开炮塔部件（砂轮/末地烛）朝向配置界面。
      */
     private static void tryOpenGrindstoneConfigScreen(Minecraft mc) {
         if (mc.player == null || mc.level == null) {
@@ -406,9 +415,9 @@ public class ClientEvents {
         BlockPos hitPos = hitResult.getBlockPos();
         BlockState hitState = mc.level.getBlockState(hitPos);
 
-        // 检测砂轮或避雷针
+        // 检测砂轮或避雷针（炮塔）或霰弹枪部件
         boolean isGrindstone = hitState.is(Blocks.GRINDSTONE);
-        boolean isRod = hitState.is(Blocks.LIGHTNING_ROD);
+        boolean isRod = hitState.is(Blocks.END_ROD) || hitState.is(Blocks.LIGHTNING_ROD);
         if (!isGrindstone && !isRod) {
             return;
         }
@@ -419,7 +428,7 @@ public class ClientEvents {
             return;
         }
 
-        String name = isGrindstone ? "砂轮" : "避雷针";
+        String name = isGrindstone ? "砂轮" : (hitState.is(Blocks.END_ROD) ? "末地烛" : "避雷针");
         IACP.LOGGER.info("[ClientEvents] 检测到 SubLevel 中的{} @ worldPos={} subLevelUUID={}",
                 name, hitPos, subLevel.getUniqueId());
         mc.setScreen(new GrindstoneConfigScreen(subLevel.getUniqueId()));
@@ -541,10 +550,10 @@ public class ClientEvents {
     /**
      * 发送油门方向到服务端（↑/↓ 键直接控制发动机油门）。
      * <p>
-     * WASD+QE 不直接控制悬挂，entries 始终为空。
-     * 智能映射系统后续会作为翻译层介入，但目前仅做双键油门控制。
+     * 同时扫描所有悬挂方块，根据每个方块生效的按键（手动 key* 或智能映射 smartKey*）
+     * 检测当前键盘状态，填入 entries。这确保 WASD 闸门能正确收到
+     * throttleForward/Backward/braking 等标志。
      */
-    private static int lastThrottleDirection = 0;
     /** 最近一次发送的油门方向（供覆盖层读取） */
     static int debugLastThrottleDir = 0;
     /** 最近检测到的 ↑ 键状态（供覆盖层读取） */
@@ -556,7 +565,6 @@ public class ClientEvents {
         long window = mc.getWindow().getWindow();
 
         // ── ↑/↓ 键直接控制油门方向 ──
-        // ↑ = 加油门（方向 +1），↓ = 减油门（方向 -1），都不按 = 保持当前值
         boolean upDown = InputConstants.isKeyDown(window, GLFW.GLFW_KEY_UP);
         boolean downDown = InputConstants.isKeyDown(window, GLFW.GLFW_KEY_DOWN);
         int throttleDirection = (upDown && !downDown) ? 1 : (downDown && !upDown) ? -1 : 0;
@@ -566,12 +574,40 @@ public class ClientEvents {
         debugThrottleDown = downDown;
         debugLastThrottleDir = throttleDirection;
 
-        // 油门变化时或正在持续加油时发送
-        if (throttleDirection != lastThrottleDirection || throttleDirection != 0) {
-            lastThrottleDirection = throttleDirection;
-            // WASD+QE 不直接悬挂，entries 传空
-            ModNetworking.sendToServer(new VehicleControlC2SPacket(List.of(), throttleDirection));
+        // ── 构建逐悬挂输入条目 ──
+        // 每个悬挂根据其生效按键（手动/智能映射）检测键盘状态，
+        // 填入 Entry 供服务端 applyControlInput() 使用。
+        // 同时本地也调 applyControlInput()，使客户端 BE 的 targetSteeringYaw
+        // 实时更新，tick() 中的 chasingYaw 随之变化，渲染器读到正确转向角。
+        List<VehicleControlC2SPacket.Entry> entries = new java.util.ArrayList<>();
+        for (BlockPos pos : ClientMountHandler.getSuspensionPositions()) {
+            BlockEntity be = mc.level.getBlockEntity(pos);
+            if (be instanceof SuspensionTestBlockEntity sbe) {
+                boolean fwd = isNamedKeyDown(sbe.getActiveKeyForward(), window);
+                boolean bwd = isNamedKeyDown(sbe.getActiveKeyBackward(), window);
+                boolean left = isNamedKeyDown(sbe.getActiveKeyLeft(), window);
+                boolean right = isNamedKeyDown(sbe.getActiveKeyRight(), window);
+                boolean brake = isNamedKeyDown(sbe.getActiveKeyBrake(), window);
+
+                entries.add(new VehicleControlC2SPacket.Entry(pos, fwd, bwd, left, right, brake));
+
+                // 本地应用：客户端 BE 的 targetSteeringYaw 立即更新 → tick() 驱动 chasingYaw
+                // 转向零网络延迟，服务端同步仅用于物理一致性。
+                sbe.applyControlInput(fwd, bwd, left, right, brake);
+            }
         }
+
+        // 每次发送最新状态（2 tick 冷却由调用者控制）
+        ModNetworking.sendToServer(new VehicleControlC2SPacket(entries, throttleDirection));
+    }
+
+    /** 检查命名按键（如 "key.keyboard.w"）是否被按下。 */
+    private static boolean isNamedKeyDown(String keyName, long window) {
+        if (keyName == null || keyName.isEmpty()) return false;
+        com.mojang.blaze3d.platform.InputConstants.Key mapped =
+                com.mojang.blaze3d.platform.InputConstants.getKey(keyName);
+        return mapped != null
+                && com.mojang.blaze3d.platform.InputConstants.isKeyDown(window, mapped.getValue());
     }
 
     /**

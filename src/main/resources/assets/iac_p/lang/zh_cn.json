@@ -2,6 +2,11 @@
   "block.iac_p.seat": "座椅",
   "block.iac_p.cockpit": "通用驾驶舱",
   "block.iac_p.cockpit_upper": "驾驶舱上层",
+  "block.iac_p.cockpit_light_linear_0": "轻型线性座舱",
+  "block.iac_p.cockpit_light_linear_1": "轻型线性座舱（延伸）",
+  "block.iac_p.cockpit_light_linear_2": "轻型线性座舱（上层）",
+  "block.iac_p.cockpit_light_linear_3": "轻型线性座舱（上层延伸）",
+  "block.iac_p.shotgun_base": "霰弹枪底座",
   "block.iac_p.turret_base": "炮塔底座",
   "block.iac_p.suspension_test": "悬挂测试方块",
   "block.iac_p.debug_gear": "调试齿轮",
@@ -91,13 +96,13 @@
   "iac_p.configuration.constraint_anchors.button": "约束锚点",
   "iac_p.configuration.constraint_anchors.tooltip": "炮塔约束锚点的偏移位置配置",
 
-  "iac_p.configuration.rod_anchor": "避雷针（炮管）锚点",
-  "iac_p.configuration.rod_anchor.button": "避雷针锚点",
-  "iac_p.configuration.rod_anchor.tooltip": "炮管端（避雷针）约束锚点偏移量",
+  "iac_p.configuration.rod_anchor": "末地烛（炮管）锚点",
+  "iac_p.configuration.rod_anchor.button": "末地烛锚点",
+  "iac_p.configuration.rod_anchor.tooltip": "炮管端（末地烛）约束锚点偏移量",
 
-  "iac_p.configuration.grindstone_rod_anchor": "砂轮端（避雷针侧）锚点",
-  "iac_p.configuration.grindstone_rod_anchor.button": "砂轮（避雷针侧）",
-  "iac_p.configuration.grindstone_rod_anchor.tooltip": "砂轮端连接避雷针一侧的约束锚点偏移量",
+  "iac_p.configuration.grindstone_rod_anchor": "砂轮端（末地烛侧）锚点",
+  "iac_p.configuration.grindstone_rod_anchor.button": "砂轮（末地烛侧）",
+  "iac_p.configuration.grindstone_rod_anchor.tooltip": "砂轮端连接末地烛一侧的约束锚点偏移量",
 
   "iac_p.configuration.grindstone_swivel": "砂轮（方向机）锚点",
   "iac_p.configuration.grindstone_swivel.button": "砂轮方向机锚点",
@@ -123,6 +128,8 @@
 
   "iac_p.configuration.section.iac.p.common.toml": "通用配置",
   "iac_p.configuration.section.iac.p.common.toml.title": "中控载具工坊：范式 通用配置",
+
+  "subtitles.iac_p.shotgun_fire": "霰弹枪开火",
 
   "debug.iac_p.overlay.mass": "重量",
   "debug.iac_p.overlay.engine": "发动机",
@@ -173,7 +180,7 @@
   "screen.iac_p.structure_info.conn_vehicle": "车体 SubLevel: %s",
   "screen.iac_p.structure_info.conn_mainworld": "主世界（无车体连接）",
   "screen.iac_p.structure_info.conn_grindstone": "砂轮 SubLevel: %s",
-  "screen.iac_p.structure_info.conn_rod": "避雷针 SubLevel: %s",
+  "screen.iac_p.structure_info.conn_rod": "末地烛 SubLevel: %s",
   "screen.iac_p.structure_info.no_connections": "无已装配的炮塔连接",
   "screen.iac_p.structure_info.hint": "§7按 ESC 或点击关闭退出 · 数据为只读",
   "screen.iac_p.structure_info.close": "关闭"

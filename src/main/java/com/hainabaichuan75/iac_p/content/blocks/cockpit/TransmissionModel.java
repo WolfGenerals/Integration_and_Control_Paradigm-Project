@@ -48,7 +48,7 @@ public final class TransmissionModel {
         double effectiveRatio = computeEffectiveRatio(gear);
         double sign = Math.signum(PowertrainConstants.getCurrentRatio(gear));
         return new TransmissionOutput(
-                inputTorque * effectiveRatio,
+                inputTorque * effectiveRatio * sign,
                 inputRpm / effectiveRatio * sign
         );
     }

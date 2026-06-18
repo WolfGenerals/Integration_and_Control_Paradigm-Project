@@ -3,10 +3,15 @@ package com.hainabaichuan75.iac_p.index;
 import com.hainabaichuan75.iac_p.IACP;
 import com.hainabaichuan75.iac_p.content.blocks.cockpit.CockpitBlock;
 import com.hainabaichuan75.iac_p.content.blocks.cockpit.CockpitUpperBlock;
+import com.hainabaichuan75.iac_p.content.blocks.cockpit_light.CockpitLightLinear0Block;
+import com.hainabaichuan75.iac_p.content.blocks.cockpit_light.CockpitLightLinear1Block;
+import com.hainabaichuan75.iac_p.content.blocks.cockpit_light.CockpitLightLinear2Block;
+import com.hainabaichuan75.iac_p.content.blocks.cockpit_light.CockpitLightLinear3Block;
 import com.hainabaichuan75.iac_p.content.blocks.debug_gear.DebugGearBlock;
 import com.hainabaichuan75.iac_p.content.blocks.debug_swivel.DebugSwivelBearingBlock;
 import com.hainabaichuan75.iac_p.content.blocks.seat.SeatBlock;
 import com.hainabaichuan75.iac_p.content.blocks.suspension_test.SuspensionTestBlock;
+import com.hainabaichuan75.iac_p.content.blocks.shotgun.ShotgunBaseBlock;
 import com.hainabaichuan75.iac_p.content.blocks.turret.TurretBaseBlock;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.SoundType;
@@ -45,6 +50,61 @@ public class ModBlocks {
                     .strength(3.0f, 3.0f)
                     .sound(SoundType.METAL)
                     .noOcclusion());
+
+    // === 轻型线性座舱（2×2 多方块结构） ===
+
+    /**
+     * 轻型座舱种子方块（驾驶座区域），放置触发整个多方块结构
+     */
+    public static final DeferredBlock<CockpitLightLinear0Block> COCKPIT_LIGHT_LINEAR_0 =
+            BLOCKS.registerBlock("cockpit_light_linear_0",
+                    CockpitLightLinear0Block::new,
+                    BlockBehaviour.Properties.of()
+                            .strength(3.0f, 3.0f)
+                            .sound(SoundType.METAL)
+                            .noOcclusion());
+
+    /**
+     * 轻型座舱水平延伸（副驾区），无对应物品，由 _0 放置时自动生成
+     */
+    public static final DeferredBlock<CockpitLightLinear1Block> COCKPIT_LIGHT_LINEAR_1 =
+            BLOCKS.registerBlock("cockpit_light_linear_1",
+                    CockpitLightLinear1Block::new,
+                    BlockBehaviour.Properties.of()
+                            .strength(3.0f, 3.0f)
+                            .sound(SoundType.METAL)
+                            .noOcclusion());
+
+    /**
+     * 轻型座舱驾驶座上方防滚架，无对应物品，由 _0 放置时自动生成
+     */
+    public static final DeferredBlock<CockpitLightLinear2Block> COCKPIT_LIGHT_LINEAR_2 =
+            BLOCKS.registerBlock("cockpit_light_linear_2",
+                    CockpitLightLinear2Block::new,
+                    BlockBehaviour.Properties.of()
+                            .strength(3.0f, 3.0f)
+                            .sound(SoundType.METAL)
+                            .noOcclusion());
+
+    /**
+     * 轻型座舱副驾上方防滚架，无对应物品，由 _0 放置时自动生成
+     */
+    public static final DeferredBlock<CockpitLightLinear3Block> COCKPIT_LIGHT_LINEAR_3 =
+            BLOCKS.registerBlock("cockpit_light_linear_3",
+                    CockpitLightLinear3Block::new,
+                    BlockBehaviour.Properties.of()
+                            .strength(3.0f, 3.0f)
+                            .sound(SoundType.METAL)
+                            .noOcclusion());
+
+    // === 霰弹枪底座方块 ===
+    public static final DeferredBlock<ShotgunBaseBlock> SHOTGUN_BASE = BLOCKS.registerBlock("shotgun_base",
+            ShotgunBaseBlock::new,
+            BlockBehaviour.Properties.of()
+                    .strength(0.5f)
+                    .sound(SoundType.WOOL)
+                    .noOcclusion()
+                    .isRedstoneConductor((s, l, p) -> false));
 
     // === 炮塔底座方块 ===
     public static final DeferredBlock<TurretBaseBlock> TURRET_BASE = BLOCKS.registerBlock("turret_base",

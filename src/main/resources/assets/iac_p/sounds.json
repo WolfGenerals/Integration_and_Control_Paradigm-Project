@@ -1,0 +1,12 @@
+{
+  "shotgun_fire": {
+    "sounds": [
+      {
+        "name": "iac_p:shotgun",
+        "attenuation_distance": 64,
+        "volume": 1.5
+      }
+    ],
+    "subtitle": "subtitles.iac_p.shotgun_fire"
+  }
+}

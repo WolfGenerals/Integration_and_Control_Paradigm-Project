@@ -45,3 +45,4 @@ maintainer: @项目协作者
 | 32 | [下车坐标系：玩家位置 vs SubLevel 底层坐标](32-下车坐标系：玩家位置vsSubLevel底层坐标.md) | player.position, logicalPose.transformPosition, world-space, directTopPosition |
 | 33 | [Affiliation 归属系统设计](33-Affiliation归属系统设计.md) | AffiliationTag/Role/Registry, ComponentRegistry, RayPolicy 矩阵, NBT+Registry 混合 |
 | 34 | 🆕 [瞄准系统：角度直驱与视差修正](34-瞄准系统：角度直驱与视差修正.md) | cameraYaw, turretYaw, atan2取反, 视差△AOC, 限速消除 |
+| 35 | 🆕 [霰弹枪设计与实现](35-霰弹枪设计与实现.md) | Shotgun, Box-Muller, 8弹丸, 20tick冷却, 枪口偏移 |

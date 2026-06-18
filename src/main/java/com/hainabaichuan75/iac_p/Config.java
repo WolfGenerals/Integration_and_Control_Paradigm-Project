@@ -63,13 +63,13 @@ public class Config {
         // Used as pos1 for rod↔grindstone GenericConstraint
         BUILDER.push("rod_anchor");
         ROD_ANCHOR_OFFSET_X = BUILDER
-                .comment("Rod (barrel) anchor X offset / 避雷针锚点 X 偏移")
+                .comment("Rod (barrel) anchor X offset / 末地烛锚点 X 偏移")
                 .defineInRange("offsetX", 0.0, -10.0, 10.0);
         ROD_ANCHOR_OFFSET_Y = BUILDER
-                .comment("Rod (barrel) anchor Y offset / 避雷针锚点 Y 偏移")
+                .comment("Rod (barrel) anchor Y offset / 末地烛锚点 Y 偏移")
                 .defineInRange("offsetY", 0.0, -10.0, 10.0);
         ROD_ANCHOR_OFFSET_Z = BUILDER
-                .comment("Rod (barrel) anchor Z offset / 避雷针锚点 Z 偏移")
+                .comment("Rod (barrel) anchor Z offset / 末地烛锚点 Z 偏移")
                 .defineInRange("offsetZ", 0.0, -10.0, 10.0);
         BUILDER.pop();
 
@@ -77,13 +77,13 @@ public class Config {
         // Used as pos2 for rod↔grindstone GenericConstraint
         BUILDER.push("grindstone_rod_anchor");
         GRINDSTONE_ROD_OFFSET_X = BUILDER
-                .comment("Grindstone (rod side) X offset / 砂轮端（避雷针侧）X 偏移")
+                .comment("Grindstone (rod side) X offset / 砂轮端（末地烛侧）X 偏移")
                 .defineInRange("offsetX", 0.0, -10.0, 10.0);
         GRINDSTONE_ROD_OFFSET_Y = BUILDER
-                .comment("Grindstone (rod side) Y offset / 砂轮端（避雷针侧）Y 偏移")
+                .comment("Grindstone (rod side) Y offset / 砂轮端（末地烛侧）Y 偏移")
                 .defineInRange("offsetY", 0.0, -10.0, 10.0);
         GRINDSTONE_ROD_OFFSET_Z = BUILDER
-                .comment("Grindstone (rod side) Z offset / 砂轮端（避雷针侧）Z 偏移")
+                .comment("Grindstone (rod side) Z offset / 砂轮端（末地烛侧）Z 偏移")
                 .defineInRange("offsetZ", 0.0, -10.0, 10.0);
         BUILDER.pop();
 
@@ -122,12 +122,12 @@ public class Config {
     public static final ModConfigSpec.BooleanValue DISMOUNT_EXPERIMENTAL_DIRECT;
 
     // ====== 炮塔约束锚点偏移配置项 ======
-    // 避雷针(炮管)端约束锚点偏移
+    // 末地烛(炮管)端约束锚点偏移
     public static final ModConfigSpec.DoubleValue ROD_ANCHOR_OFFSET_X;
     public static final ModConfigSpec.DoubleValue ROD_ANCHOR_OFFSET_Y;
     public static final ModConfigSpec.DoubleValue ROD_ANCHOR_OFFSET_Z;
 
-    // 砂轮端(避雷针侧)约束锚点偏移
+    // 砂轮端(末地烛侧)约束锚点偏移
     public static final ModConfigSpec.DoubleValue GRINDSTONE_ROD_OFFSET_X;
     public static final ModConfigSpec.DoubleValue GRINDSTONE_ROD_OFFSET_Y;
     public static final ModConfigSpec.DoubleValue GRINDSTONE_ROD_OFFSET_Z;

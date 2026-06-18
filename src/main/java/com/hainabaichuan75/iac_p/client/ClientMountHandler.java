@@ -162,6 +162,9 @@ public class ClientMountHandler {
      */
     private static boolean smartMappingActive = false;
 
+    /** 当前载具的智能变速是否已启用（从 CockpitBE 同步） */
+    private static boolean autoShiftEnabled = false;
+
     /**
      * 当前选中的驾驶技能 ID（从 CockpitBE 同步）
      */
@@ -173,6 +176,14 @@ public class ClientMountHandler {
 
     public static void setSmartMappingActive(boolean active) {
         smartMappingActive = active;
+    }
+
+    public static boolean isAutoShiftEnabled() {
+        return autoShiftEnabled;
+    }
+
+    public static void setAutoShiftEnabled(boolean enabled) {
+        autoShiftEnabled = enabled;
     }
 
     /**
@@ -232,16 +243,18 @@ public class ClientMountHandler {
     }
 
     /**
-     * 在 SubLevel 中查找驾驶舱 BE，同步其 smartMappingActive 和 activeSkillId 状态到缓存。
+     * 在 SubLevel 中查找驾驶舱 BE，同步其 smartMappingActive、autoShiftEnabled 和 activeSkillId 状态到缓存。
      */
     public static void syncSmartMappingState(SubLevel subLevel, Level level) {
         smartMappingActive = false;
+        autoShiftEnabled = false;
         activeSkillId = com.hainabaichuan75.iac_p.skill.SkillRegistry.DEFAULT_SKILL_ID;
 
         SubLevelScanner.forEachBlock(subLevel, level, (worldPos, state, be) -> {
             if (state.getBlock() instanceof com.hainabaichuan75.iac_p.content.blocks.cockpit.CockpitBlock
                     && be instanceof com.hainabaichuan75.iac_p.content.blocks.cockpit.CockpitBlockEntity cockpit) {
                 smartMappingActive = cockpit.isSmartMappingActive();
+                autoShiftEnabled = cockpit.isAutoShiftEnabled();
                 String skillId = cockpit.getActiveSkillId();
                 if (skillId != null && !skillId.isEmpty()) {
                     activeSkillId = skillId;
@@ -397,6 +410,8 @@ public class ClientMountHandler {
     private static double cachedEffectiveTorque = 0;
     /** 载具当前速度（m/s） */
     private static double cachedVehicleSpeedMs = 0;
+    /** 载具当前加速度（m/s²），来自服务端速度差分 */
+    private static double cachedVehicleAccelMs2 = 0;
     /** 是否正在换挡（动力中断期间） */
     private static boolean cachedIsShifting = false;
 
@@ -407,13 +422,14 @@ public class ClientMountHandler {
     public static void updateVehicleState(
             double engineRpm, double throttleLevel, int currentGear,
             boolean stalled, double effectiveTorque, double vehicleSpeedMs,
-            boolean isShifting) {
+            double vehicleAccelMs2, boolean isShifting) {
         cachedEngineRpm = engineRpm;
         cachedThrottleLevel = throttleLevel;
         cachedCurrentGear = currentGear;
         cachedStalled = stalled;
         cachedEffectiveTorque = effectiveTorque;
         cachedVehicleSpeedMs = vehicleSpeedMs;
+        cachedVehicleAccelMs2 = vehicleAccelMs2;
         cachedIsShifting = isShifting;
     }
 
@@ -429,6 +445,8 @@ public class ClientMountHandler {
     public static double getCachedEffectiveTorque() { return cachedEffectiveTorque; }
     /** @return 缓存的载具速度（m/s） */
     public static double getCachedVehicleSpeedMs() { return cachedVehicleSpeedMs; }
+    /** @return 缓存的载具加速度（m/s²） */
+    public static double getCachedVehicleAccelMs2() { return cachedVehicleAccelMs2; }
     /** @return 是否正在换挡 */
     public static boolean isCachedShifting() { return cachedIsShifting; }
 
@@ -440,6 +458,7 @@ public class ClientMountHandler {
         cachedStalled = false;
         cachedEffectiveTorque = 0;
         cachedVehicleSpeedMs = 0;
+        cachedVehicleAccelMs2 = 0;
         cachedIsShifting = false;
     }
 
@@ -481,6 +500,7 @@ public class ClientMountHandler {
             clearAllOrientationCache();
             SUSPENSION_POSITIONS.clear();
             smartMappingActive = false;
+            autoShiftEnabled = false;
             activeSkillId = com.hainabaichuan75.iac_p.skill.SkillRegistry.DEFAULT_SKILL_ID;
             // 强制关闭哨兵模式
             disableStationaryCamera();

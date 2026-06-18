@@ -1,6 +1,7 @@
 package com.hainabaichuan75.iac_p.network.packets;
 
 import com.hainabaichuan75.iac_p.IACP;
+import com.hainabaichuan75.iac_p.content.blocks.shotgun.ShotgunBaseBlockEntity;
 import com.hainabaichuan75.iac_p.content.blocks.turret.TurretBaseBlockEntity;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -55,18 +56,40 @@ public record GrindstoneConfigC2SPacket(UUID grindstoneSubLevelUUID, Direction f
                     }
                 }
 
-                // 再查避雷针注册表
+                // 再查避雷针注册表（炮塔）
                 ownerPos = TurretBaseBlockEntity.findOwnerByRodUUID(uuid);
                 if (ownerPos != null) {
                     BlockEntity be = level.getBlockEntity(ownerPos);
                     if (be instanceof TurretBaseBlockEntity turret) {
                         turret.setLightningRodFacing(packet.facing);
-                        IACP.LOGGER.info("[PartConfig] 避雷针朝向 -> {} (底座 @ {})", packet.facing, ownerPos);
+                        IACP.LOGGER.info("[PartConfig] 末地烛朝向 -> {} (底座 @ {})", packet.facing, ownerPos);
                         return;
                     }
                 }
 
-                IACP.LOGGER.warn("[PartConfig] 未找到拥有 SubLevel {} 的 TurretBase", uuid);
+                // 查霰弹枪砂轮注册表
+                ownerPos = ShotgunBaseBlockEntity.findOwnerByGrindstoneUUID(uuid);
+                if (ownerPos != null) {
+                    BlockEntity be = level.getBlockEntity(ownerPos);
+                    if (be instanceof ShotgunBaseBlockEntity shotgun) {
+                        shotgun.setGrindstoneFacing(packet.facing);
+                        IACP.LOGGER.info("[PartConfig] 霰弹枪砂轮朝向 -> {} (底座 @ {})", packet.facing, ownerPos);
+                        return;
+                    }
+                }
+
+                // 查霰弹枪避雷针注册表
+                ownerPos = ShotgunBaseBlockEntity.findOwnerByRodUUID(uuid);
+                if (ownerPos != null) {
+                    BlockEntity be = level.getBlockEntity(ownerPos);
+                    if (be instanceof ShotgunBaseBlockEntity shotgun) {
+                        shotgun.setLightningRodFacing(packet.facing);
+                        IACP.LOGGER.info("[PartConfig] 霰弹枪避雷针朝向 -> {} (底座 @ {})", packet.facing, ownerPos);
+                        return;
+                    }
+                }
+
+                IACP.LOGGER.warn("[PartConfig] 未找到拥有 SubLevel {} 的武器底座", uuid);
             }
         });
     }

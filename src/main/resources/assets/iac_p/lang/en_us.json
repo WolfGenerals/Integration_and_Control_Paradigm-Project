@@ -2,6 +2,11 @@
   "block.iac_p.seat": "Seat",
   "block.iac_p.cockpit": "Universal Cockpit",
   "block.iac_p.cockpit_upper": "Cockpit Upper",
+  "block.iac_p.cockpit_light_linear_0": "Light Cockpit Linear",
+  "block.iac_p.cockpit_light_linear_1": "Light Cockpit Linear (Ext)",
+  "block.iac_p.cockpit_light_linear_2": "Light Cockpit Linear (Upper)",
+  "block.iac_p.cockpit_light_linear_3": "Light Cockpit Linear (Upper Ext)",
+  "block.iac_p.shotgun_base": "Shotgun Base",
   "block.iac_p.turret_base": "Turret Base",
   "block.iac_p.suspension_test": "Suspension Test Block",
   "block.iac_p.debug_gear": "Debug Gear",
@@ -93,11 +98,11 @@
 
   "iac_p.configuration.rod_anchor": "Rod (Barrel) Anchor",
   "iac_p.configuration.rod_anchor.button": "Rod Anchor",
-  "iac_p.configuration.rod_anchor.tooltip": "Anchor offset for the lightning rod (barrel) end of the turret",
+  "iac_p.configuration.rod_anchor.tooltip": "Anchor offset for the end rod (barrel) end of the turret",
 
   "iac_p.configuration.grindstone_rod_anchor": "Grindstone (Rod Side) Anchor",
   "iac_p.configuration.grindstone_rod_anchor.button": "Grindstone Rod Anchor",
-  "iac_p.configuration.grindstone_rod_anchor.tooltip": "Anchor offset for the grindstone end connected to the rod",
+  "iac_p.configuration.grindstone_rod_anchor.tooltip": "Anchor offset for the grindstone end connected to the end rod",
 
   "iac_p.configuration.grindstone_swivel": "Grindstone (Swivel) Anchor",
   "iac_p.configuration.grindstone_swivel.button": "Grindstone Swivel Anchor",
@@ -123,6 +128,8 @@
 
   "iac_p.configuration.section.iac.p.common.toml": "Common Config",
   "iac_p.configuration.section.iac.p.common.toml.title": "IAC-P Common Config",
+
+  "subtitles.iac_p.shotgun_fire": "Shotgun fires",
 
   "debug.iac_p.overlay.mass": "Weight",
   "debug.iac_p.overlay.engine": "Engine",
@@ -173,7 +180,7 @@
   "screen.iac_p.structure_info.conn_vehicle": "Vehicle SubLevel: %s",
   "screen.iac_p.structure_info.conn_mainworld": "Main World (no vehicle connection)",
   "screen.iac_p.structure_info.conn_grindstone": "Grindstone SubLevel: %s",
-  "screen.iac_p.structure_info.conn_rod": "LightningRod SubLevel: %s",
+  "screen.iac_p.structure_info.conn_rod": "EndRod SubLevel: %s",
   "screen.iac_p.structure_info.no_connections": "No assembled turret connections",
   "screen.iac_p.structure_info.hint": "§7Press ESC or click Close to exit · Data is read-only",
   "screen.iac_p.structure_info.close": "Close"

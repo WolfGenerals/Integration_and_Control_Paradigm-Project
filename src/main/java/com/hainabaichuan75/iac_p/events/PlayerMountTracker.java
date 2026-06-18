@@ -226,16 +226,27 @@ public class PlayerMountTracker {
     );
 
     /**
+     * 轻型线性座舱（4 方块 2×2 结构：种子块 + 延伸 + 上层 + 对角上层）
+     */
+    private static final Set<Block> GROUP_LIGHT_LINEAR = Set.of(
+            ModBlocks.COCKPIT_LIGHT_LINEAR_0.get(),
+            ModBlocks.COCKPIT_LIGHT_LINEAR_1.get(),
+            ModBlocks.COCKPIT_LIGHT_LINEAR_2.get(),
+            ModBlocks.COCKPIT_LIGHT_LINEAR_3.get()
+    );
+
+    /**
      * 所有驾驶舱组的集合（用于迭代）
      */
-    private static final List<Set<Block>> ALL_COCKPIT_GROUPS = List.of(GROUP_GENERAL, GROUP_CORE_0);
+    private static final List<Set<Block>> ALL_COCKPIT_GROUPS = List.of(GROUP_GENERAL, GROUP_CORE_0, GROUP_LIGHT_LINEAR);
 
     /**
      * 被视为"核心下半截"的方块（一个组内只能有一个下半截）
      */
     private static final Set<Block> CORE_LOWER_HALVES = Set.of(
             ModBlocks.COCKPIT.get(),
-            ModBlocks.SEAT.get()
+            ModBlocks.SEAT.get(),
+            ModBlocks.COCKPIT_LIGHT_LINEAR_0.get()
     );
 
     /**

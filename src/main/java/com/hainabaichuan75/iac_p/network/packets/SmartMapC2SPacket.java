@@ -53,7 +53,8 @@ public class SmartMapC2SPacket implements CustomPacketPayload {
         CAR_MODE,       // 应用汽车模式（旧版兼容）
         REVERSE,        // 反转方向盘（W↔S, A↔D）
         TOGGLE_SMART,   // 开关智能映射
-        SELECT_SKILL    // 选择驾驶技能（payload=技能ID）
+        SELECT_SKILL,   // 选择驾驶技能（payload=技能ID）
+        TOGGLE_AUTO_SHIFT // 开关智能变速
     }
 
     private final Action action;
@@ -124,6 +125,11 @@ public class SmartMapC2SPacket implements CustomPacketPayload {
                 }
                 case REVERSE -> applyReverse(subLevel, level, cockpit);
                 case TOGGLE_SMART -> toggleSmartMapping(subLevel, level, cockpit);
+                case TOGGLE_AUTO_SHIFT -> {
+                    cockpit.setAutoShiftEnabled(!cockpit.isAutoShiftEnabled());
+                    IACP.LOGGER.info("[SmartMap] 智能变速 {}",
+                            cockpit.isAutoShiftEnabled() ? "开启" : "关闭");
+                }
                 case SELECT_SKILL -> {
                     String skillId = packet.payload;
                     if (skillId.isEmpty()) {

@@ -38,6 +38,18 @@ public enum ComponentRole {
      * 高低机（避雷针 SubLevel 对应方块的占位标记）：负责炮塔俯仰
      */
     TURRET_PITCH,
+    /**
+     * 霰弹枪底座：霰弹枪的安装基座
+     */
+    SHOTGUN_BASE,
+    /**
+     * 霰弹枪方向机：负责枪塔水平旋转
+     */
+    SHOTGUN_YAW,
+    /**
+     * 霰弹枪高低机：负责枪塔俯仰
+     */
+    SHOTGUN_PITCH,
     // ==================================================================
     //  武器类别（未来扩展）
     // ==================================================================
@@ -108,6 +120,7 @@ public enum ComponentRole {
      */
     public boolean isWeapon() {
         return this == TURRET_BASE || this == TURRET_YAW || this == TURRET_PITCH
+                || this == SHOTGUN_BASE || this == SHOTGUN_YAW || this == SHOTGUN_PITCH
                 || this == WEAPON_CANNON || this == WEAPON_MACHINEGUN
                 || this == WEAPON_MISSILE || this == WEAPON_LASER;
     }

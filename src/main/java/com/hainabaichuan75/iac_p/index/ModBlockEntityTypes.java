@@ -2,6 +2,7 @@ package com.hainabaichuan75.iac_p.index;
 
 import com.hainabaichuan75.iac_p.IACP;
 import com.hainabaichuan75.iac_p.content.blocks.suspension_test.SuspensionTestBlockEntity;
+import com.hainabaichuan75.iac_p.content.blocks.shotgun.ShotgunBaseBlockEntity;
 import com.hainabaichuan75.iac_p.content.blocks.turret.TurretBaseBlockEntity;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.world.level.block.entity.BlockEntityType;
@@ -25,5 +26,12 @@ public class ModBlockEntityTypes {
                     () -> BlockEntityType.Builder.of(
                             TurretBaseBlockEntity::new,
                             ModBlocks.TURRET_BASE.get()
+                    ).build(null));
+
+    public static final Supplier<BlockEntityType<ShotgunBaseBlockEntity>> SHOTGUN_BASE =
+            BLOCK_ENTITY_TYPES.register("shotgun_base",
+                    () -> BlockEntityType.Builder.of(
+                            ShotgunBaseBlockEntity::new,
+                            ModBlocks.SHOTGUN_BASE.get()
                     ).build(null));
 }
