@@ -2,7 +2,7 @@ package com.hainabaichuan75.iac_p.network.packets;
 
 import com.hainabaichuan75.iac_p.IACP;
 import com.hainabaichuan75.iac_p.content.blocks.shotgun.ShotgunBaseBlockEntity;
-import com.hainabaichuan75.iac_p.content.blocks.turret.TurretBaseBlockEntity;
+import com.hainabaichuan75.iac_p.content.blocks.machine_gun.MachineGunBaseBlockEntity;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.network.RegistryFriendlyByteBuf;
@@ -20,7 +20,7 @@ import java.util.UUID;
  * GrindstoneConfigC2SPacket —— 客户端→服务端：更改砂轮朝向。
  * <p>
  * 携带砂轮 SubLevel 的 UUID 和目标朝向方向。
- * 服务端找到拥有该 SubLevel 的 TurretBaseBlockEntity，更新方块状态。
+ * 服务端找到拥有该 SubLevel 的 MachineGunBaseBlockEntity，更新方块状态。
  */
 public record GrindstoneConfigC2SPacket(UUID grindstoneSubLevelUUID, Direction facing) implements CustomPacketPayload {
 
@@ -46,10 +46,10 @@ public record GrindstoneConfigC2SPacket(UUID grindstoneSubLevelUUID, Direction f
                 UUID uuid = packet.grindstoneSubLevelUUID;
 
                 // 先查砂轮注册表
-                BlockPos ownerPos = TurretBaseBlockEntity.findOwnerByGrindstoneUUID(uuid);
+                BlockPos ownerPos = MachineGunBaseBlockEntity.findOwnerByGrindstoneUUID(uuid);
                 if (ownerPos != null) {
                     BlockEntity be = level.getBlockEntity(ownerPos);
-                    if (be instanceof TurretBaseBlockEntity turret) {
+                    if (be instanceof MachineGunBaseBlockEntity turret) {
                         turret.setGrindstoneFacing(packet.facing);
                         IACP.LOGGER.info("[PartConfig] 砂轮朝向 -> {} (底座 @ {})", packet.facing, ownerPos);
                         return;
@@ -57,10 +57,10 @@ public record GrindstoneConfigC2SPacket(UUID grindstoneSubLevelUUID, Direction f
                 }
 
                 // 再查避雷针注册表（炮塔）
-                ownerPos = TurretBaseBlockEntity.findOwnerByRodUUID(uuid);
+                ownerPos = MachineGunBaseBlockEntity.findOwnerByRodUUID(uuid);
                 if (ownerPos != null) {
                     BlockEntity be = level.getBlockEntity(ownerPos);
-                    if (be instanceof TurretBaseBlockEntity turret) {
+                    if (be instanceof MachineGunBaseBlockEntity turret) {
                         turret.setLightningRodFacing(packet.facing);
                         IACP.LOGGER.info("[PartConfig] 末地烛朝向 -> {} (底座 @ {})", packet.facing, ownerPos);
                         return;

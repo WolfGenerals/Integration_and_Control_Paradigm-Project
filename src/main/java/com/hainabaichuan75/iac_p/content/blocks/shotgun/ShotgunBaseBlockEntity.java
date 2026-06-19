@@ -249,7 +249,7 @@ public class ShotgunBaseBlockEntity extends KineticBlockEntity implements com.ha
      * 限速轨迹规划：每 tick 最多移动此角度，最后 1 tick 精确到位、不超调。
      */
     private static double yawSpeedPerTick() {
-        return Config.TURRET_YAW_SPEED_DPS.get() / 20.0;
+        return Config.MACHINE_GUN_YAW_SPEED_DPS.get() / 20.0;
     }
 
     // ====== 高低机（Pitch）位置模式 PD 伺服 ======
@@ -277,7 +277,7 @@ public class ShotgunBaseBlockEntity extends KineticBlockEntity implements com.ha
      * 高低机最大转速（度/游戏刻），从 Config 的度/秒值自动换算。
      */
     private static double pitchSpeedPerTick() {
-        return Config.TURRET_PITCH_SPEED_DPS.get() / 20.0;
+        return Config.MACHINE_GUN_PITCH_SPEED_DPS.get() / 20.0;
     }
 
     // ==================================================================
@@ -615,7 +615,7 @@ public class ShotgunBaseBlockEntity extends KineticBlockEntity implements com.ha
 
         // 注册归属：砂轮 → 载具
         if (this.vehicleSubLevelId != null) {
-            AffiliationHelper.registerTurretPart(
+            AffiliationHelper.registerMachineGunPart(
                     grindstoneSL.getUniqueId(), this.vehicleSubLevelId,
                     this.groupId, AffiliationRole.SHOTGUN_YAW, AffiliationTag.FACTION_NEUTRAL);
         }
@@ -676,7 +676,7 @@ public class ShotgunBaseBlockEntity extends KineticBlockEntity implements com.ha
 
                 // 注册归属：避雷针 → 载具
                 if (this.vehicleSubLevelId != null && this.groupId != null) {
-                    AffiliationHelper.registerTurretPart(
+                    AffiliationHelper.registerMachineGunPart(
                             rodSL.getUniqueId(), this.vehicleSubLevelId,
                             this.groupId, AffiliationRole.SHOTGUN_PITCH, AffiliationTag.FACTION_NEUTRAL);
                 }
@@ -1149,12 +1149,12 @@ public class ShotgunBaseBlockEntity extends KineticBlockEntity implements com.ha
         if (!clientPacket && this.level != null && !this.level.isClientSide && this.assembled) {
             if (this.vehicleSubLevelId != null) {
                 if (this.grindstoneSubLevelId != null && this.groupId != null) {
-                    AffiliationHelper.registerTurretPart(
+                    AffiliationHelper.registerMachineGunPart(
                             this.grindstoneSubLevelId, this.vehicleSubLevelId,
                             this.groupId, AffiliationRole.SHOTGUN_YAW, AffiliationTag.FACTION_NEUTRAL);
                 }
                 if (this.lightningRodSubLevelId != null && this.groupId != null) {
-                    AffiliationHelper.registerTurretPart(
+                    AffiliationHelper.registerMachineGunPart(
                             this.lightningRodSubLevelId, this.vehicleSubLevelId,
                             this.groupId, AffiliationRole.SHOTGUN_PITCH, AffiliationTag.FACTION_NEUTRAL);
                 }

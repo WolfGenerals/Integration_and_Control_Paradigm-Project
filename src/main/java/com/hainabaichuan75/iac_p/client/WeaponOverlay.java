@@ -5,7 +5,7 @@ import com.hainabaichuan75.iac_p.affiliation.ComponentEntry;
 import com.hainabaichuan75.iac_p.affiliation.ComponentRegistry;
 import com.hainabaichuan75.iac_p.affiliation.ComponentRole;
 import com.hainabaichuan75.iac_p.content.blocks.shotgun.ShotgunBaseBlockEntity;
-import com.hainabaichuan75.iac_p.content.blocks.turret.TurretBaseBlockEntity;
+import com.hainabaichuan75.iac_p.content.blocks.machine_gun.MachineGunBaseBlockEntity;
 import dev.ryanhcode.sable.api.sublevel.SubLevelContainer;
 import dev.ryanhcode.sable.companion.math.BoundingBox3ic;
 import dev.ryanhcode.sable.companion.math.BoundingBox3i;
@@ -94,7 +94,7 @@ public class WeaponOverlay {
      * 炮塔射线起点在避雷针方块中心，需沿炮管方向前移才能越过炮管方块表面。
      * 与 {@link #SHOTGUN_MUZZLE_OFFSET} 分开配置以分别调优。
      */
-    private static final double TURRET_MUZZLE_OFFSET = 0.6;
+    private static final double MACHINE_GUN_MUZZLE_OFFSET = 0.6;
 
     /**
      * 开火速度偏移系数（秒）。
@@ -110,7 +110,7 @@ public class WeaponOverlay {
     /**
      * 霰弹枪开火最小间隔（tick）
      */
-    private static final int SHOTGUN_FIRE_COOLDOWN_TICKS = 5;
+    private static final int SHOTGUN_FIRE_COOLDOWN_TICKS = 2;
 
     /**
      * 霰弹枪上次开火的游戏刻
@@ -230,7 +230,7 @@ public class WeaponOverlay {
         activeFires.clear();
 
         // ---- 首选：通过 ComponentRegistry 查询武器底座 ----
-        var turretEntries = ComponentRegistry.getComponents(mountedUUID, ComponentRole.TURRET_BASE);
+        var turretEntries = ComponentRegistry.getComponents(mountedUUID, ComponentRole.MACHINE_GUN_BASE);
         var shotgunEntries = ComponentRegistry.getComponents(mountedUUID, ComponentRole.SHOTGUN_BASE);
         if (!turretEntries.isEmpty() || !shotgunEntries.isEmpty()) {
             fireFromRegistry(mc, container, mountedUUID, partialTick, vehicleVel, turretEntries, shotgunEntries);
@@ -290,9 +290,27 @@ public class WeaponOverlay {
             UUID mountedUUID, float partialTick, Vec3 vehicleVel,
             List<ComponentEntry> turretEntries,
             List<ComponentEntry> shotgunEntries) {
+        // ════════════════════════════════════════════════════════════════
+        //  本地音效（零延迟）：在发送网络包之前立即播放，
+        //  消除服务端广播带来的网络往返延迟。
+        //  服务端 WeaponFireC2SPacket.handle() 仍会广播给其他玩家。
+        // ════════════════════════════════════════════════════════════════
+        boolean playedTurretSound = false;
+        boolean playedShotgunSound = false;
+        Vec3 playerPos = mc.player != null ? mc.player.position()
+                : new Vec3(0, 0, 0);
+
         for (var entry : turretEntries) {
             BlockEntity be = entry.blockEntity();
-            if (be instanceof TurretBaseBlockEntity tb && tb.isAssembled()) {
+            if (be instanceof MachineGunBaseBlockEntity tb && tb.isAssembled()) {
+                if (!playedTurretSound) {
+                    mc.level.playLocalSound(
+                            playerPos.x, playerPos.y, playerPos.z,
+                            ModSounds.MACHINE_GUN_FIRE.get(),
+                            SoundSource.PLAYERS,
+                            1.0f, 1.0f, false);
+                    playedTurretSound = true;
+                }
                 fireSingleTurret(mc, container, mountedUUID, partialTick, vehicleVel, tb);
             }
         }
@@ -306,12 +324,17 @@ public class WeaponOverlay {
             lastShotgunFireTick = currentTick;
         }
 
-        // 音效已迁移至服务端 WeaponFireC2SPacket.handle() 广播，
-        // 确保所有玩家都能听到 + 使用 muzzle 位置获得空间感
-
         for (var entry : shotgunEntries) {
             BlockEntity be = entry.blockEntity();
             if (be instanceof ShotgunBaseBlockEntity sb && sb.isAssembled()) {
+                if (!playedShotgunSound) {
+                    mc.level.playLocalSound(
+                            playerPos.x, playerPos.y, playerPos.z,
+                            ModSounds.SHOTGUN_FIRE.get(),
+                            SoundSource.PLAYERS,
+                            1.5f, 1.0f, false);
+                    playedShotgunSound = true;
+                }
                 fireSingleShotgun(mc, container, mountedUUID, partialTick, vehicleVel, sb);
             }
         }
@@ -331,6 +354,7 @@ public class WeaponOverlay {
         // 霰弹枪组冷却（回退路径也需检查）
         boolean shotgunReady = true;
         boolean sgSoundPlayed = false;
+        boolean mgSoundPlayed = false;
         if (mc.level != null) {
             int currentTick = (int) mc.level.getGameTime();
             if (currentTick - lastShotgunFireTick < SHOTGUN_FIRE_COOLDOWN_TICKS) {
@@ -352,8 +376,16 @@ public class WeaponOverlay {
                     for (int z = localBounds.minZ(); z <= localBounds.maxZ(); z++) {
                         BlockPos wp = new BlockPos(x + cx, y, z + cz);
                         var be = mc.level.getBlockEntity(wp);
-                        if (be instanceof TurretBaseBlockEntity tb) {
+                        if (be instanceof MachineGunBaseBlockEntity tb) {
                             if (tb.isAssembled()) {
+                                if (!mgSoundPlayed) {
+                                    mc.level.playLocalSound(
+                                            mc.player.getX(), mc.player.getY(), mc.player.getZ(),
+                                            ModSounds.MACHINE_GUN_FIRE.get(),
+                                            SoundSource.PLAYERS,
+                                            1.0f, 1.0f, false);
+                                    mgSoundPlayed = true;
+                                }
                                 fireSingleTurret(mc, container, mountedUUID, partialTick, vehicleVel, tb);
                             }
                         } else if (be instanceof ShotgunBaseBlockEntity sb) {
@@ -534,7 +566,7 @@ public class WeaponOverlay {
      */
     private static void fireSingleTurret(Minecraft mc, SubLevelContainer container,
             UUID mountedUUID, float partialTick, Vec3 vehicleVel,
-            TurretBaseBlockEntity tb) {
+            MachineGunBaseBlockEntity tb) {
         UUID rodId = tb.getLightningRodSubLevelId();
         if (rodId == null) {
             return;
@@ -569,7 +601,7 @@ public class WeaponOverlay {
         Vec3 dirNorm = dir.normalize();
 
         // 枪口偏移：沿炮管方向前移，避免射线起点在方块内部挡弹
-        Vec3 muzzleOrigin = blockCenter.add(dirNorm.scale(TURRET_MUZZLE_OFFSET));
+        Vec3 muzzleOrigin = blockCenter.add(dirNorm.scale(MACHINE_GUN_MUZZLE_OFFSET));
 
         // 速度偏移：将发射点沿载具速度方向偏移，补偿开火到判定间的时间差
         muzzleOrigin = muzzleOrigin.add(vehicleVel.scale(FIRING_SPEED_OFFSET));
@@ -589,7 +621,7 @@ public class WeaponOverlay {
                     hitPos.x, hitPos.y, hitPos.z,
                     subHit.uuid(), subHit.localPos(),
                     vehicleVel.x, vehicleVel.y, vehicleVel.z,
-                    WeaponFireC2SPacket.WEAPON_TURRET
+                    WeaponFireC2SPacket.WEAPON_MACHINE_GUN
             ));
         } else {
             // 非 SubLevel 命中（地形/实体等）：发送世界坐标 + 速度外推
@@ -597,7 +629,7 @@ public class WeaponOverlay {
                     muzzleOrigin.x, muzzleOrigin.y, muzzleOrigin.z,
                     hitPos.x, hitPos.y, hitPos.z,
                     vehicleVel.x, vehicleVel.y, vehicleVel.z,
-                    WeaponFireC2SPacket.WEAPON_TURRET
+                    WeaponFireC2SPacket.WEAPON_MACHINE_GUN
             ));
         }
     }

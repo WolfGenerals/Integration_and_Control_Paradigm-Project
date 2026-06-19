@@ -1,7 +1,7 @@
 package com.hainabaichuan75.iac_p.client.screen;
 
 import com.hainabaichuan75.iac_p.IACP;
-import com.hainabaichuan75.iac_p.content.blocks.turret.TurretBaseBlockEntity;
+import com.hainabaichuan75.iac_p.content.blocks.machine_gun.MachineGunBaseBlockEntity;
 import com.hainabaichuan75.iac_p.network.ModNetworking;
 import com.hainabaichuan75.iac_p.network.packets.AnchorConfigC2SPacket;
 import com.hainabaichuan75.iac_p.network.packets.GrindstoneConfigC2SPacket;
@@ -125,7 +125,7 @@ public class GrindstoneConfigScreen extends Screen {
 
     /** 从客户端锚点缓存读取当前值，无则返回 (0,0,0) */
     private double[] getCurrentAnchor() {
-        double[] fromMap = TurretBaseBlockEntity.getAnchorMap().get(this.subLevelUUID);
+        double[] fromMap = MachineGunBaseBlockEntity.getAnchorMap().get(this.subLevelUUID);
         return (fromMap != null && fromMap.length >= 3) ? fromMap : new double[]{0.0, 0.0, 0.0};
     }
 

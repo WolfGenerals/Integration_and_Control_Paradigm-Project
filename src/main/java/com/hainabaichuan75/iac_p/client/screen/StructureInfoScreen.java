@@ -27,7 +27,7 @@ import java.util.List;
  * │  minecraft:stone         45              │
  * │  create:andesite_casing  23              │
  * │  iac_p:cockpit           1               │
- * │  iac_p:turret_base       2               │
+ * │  iac_p:machine_gun_base       2               │
  * │  ...（最多显示 12 行）                    │
  * │                                          │
  * │  ── 武器系统 ──                          │
@@ -143,30 +143,30 @@ public class StructureInfoScreen extends Screen {
                 LABEL_X, currentY, 0xFF5555);
         currentY += LINE_HEIGHT;
 
-        List<StructureInfoData.TurretInfo> turrets = data.turrets();
-        if (turrets.isEmpty()) {
+        List<StructureInfoData.MachineGunInfo> machineGuns = data.machineGuns();
+        if (machineGuns.isEmpty()) {
             graphics.drawString(this.font,
                     "§7" + Component.translatable("screen.iac_p.structure_info.no_weapons").getString(),
                     LABEL_X + 8, currentY, 0xAAAAAA);
             currentY += LINE_HEIGHT;
         } else {
             // 总量统计
-            int assembledCount = (int) turrets.stream().filter(StructureInfoData.TurretInfo::isAssembled).count();
+            int assembledCount = (int) machineGuns.stream().filter(StructureInfoData.MachineGunInfo::isAssembled).count();
             graphics.drawString(this.font,
                     "§7" + Component.translatable(
-                            "screen.iac_p.structure_info.turret_count",
-                            turrets.size(), assembledCount).getString(),
+                            "screen.iac_p.structure_info.machine_gun_count",
+                            machineGuns.size(), assembledCount).getString(),
                     LABEL_X + 8, currentY, 0xAAAAAA);
             currentY += LINE_HEIGHT + 2;
 
             // 每个炮塔明细
-            int turretIndex = 1;
-            for (StructureInfoData.TurretInfo t : turrets) {
+            int machineGunIndex = 1;
+            for (StructureInfoData.MachineGunInfo t : machineGuns) {
                 // 标题行
                 graphics.drawString(this.font,
                         "§e► " + Component.translatable(
-                                "screen.iac_p.structure_info.turret_entry",
-                                turretIndex, t.position().toShortString()).getString(),
+                                "screen.iac_p.structure_info.machine_gun_entry",
+                                machineGunIndex, t.position().toShortString()).getString(),
                         LABEL_X + 8, currentY, 0xFFFF55);
                 currentY += LINE_HEIGHT;
 
@@ -177,7 +177,7 @@ public class StructureInfoScreen extends Screen {
                         LABEL_X + 8, currentY, 0xAAAAAA);
                 currentY += LINE_HEIGHT;
 
-                turretIndex++;
+                machineGunIndex++;
             }
         }
 
@@ -192,24 +192,24 @@ public class StructureInfoScreen extends Screen {
         currentY += LINE_HEIGHT;
 
         boolean hasConnections = false;
-        for (var turret : data.turrets()) {
-            if (turret.isAssembled()) {
+        for (var machineGun : data.machineGuns()) {
+            if (machineGun.isAssembled()) {
                 hasConnections = true;
 
-                // 炮塔底座位置信息
+                // 机炮底座位置信息
                 graphics.drawString(this.font,
                         "§7" + Component.translatable(
-                                "screen.iac_p.structure_info.connection_turret",
-                                turret.position().toShortString()).getString(),
+                                "screen.iac_p.structure_info.connection_machine_gun",
+                                machineGun.position().toShortString()).getString(),
                         LABEL_X + 8, currentY, 0xAAAAAA);
                 currentY += LINE_HEIGHT;
 
                 // 连接的物理结构
-                if (turret.vehicleSubLevelId() != null) {
+                if (machineGun.vehicleSubLevelId() != null) {
                     graphics.drawString(this.font,
                             "  §a├ " + Component.translatable(
                                     "screen.iac_p.structure_info.conn_vehicle",
-                                    turret.vehicleSubLevelId().toString().substring(0, 8) + "…")
+                                    machineGun.vehicleSubLevelId().toString().substring(0, 8) + "…")
                                     .getString(),
                             LABEL_X + 8, currentY, 0x55FF55);
                     currentY += LINE_HEIGHT;
@@ -222,22 +222,22 @@ public class StructureInfoScreen extends Screen {
                 }
 
                 // 砂轮 SubLevel
-                if (turret.grindstoneSubLevelId() != null) {
+                if (machineGun.grindstoneSubLevelId() != null) {
                     graphics.drawString(this.font,
                             "  §a├ " + Component.translatable(
                                     "screen.iac_p.structure_info.conn_grindstone",
-                                    turret.grindstoneSubLevelId().toString().substring(0, 8) + "…")
+                                    machineGun.grindstoneSubLevelId().toString().substring(0, 8) + "…")
                                     .getString(),
                             LABEL_X + 8, currentY, 0x55FF55);
                     currentY += LINE_HEIGHT;
                 }
 
                 // 炮管 SubLevel
-                if (turret.lightningRodSubLevelId() != null) {
+                if (machineGun.lightningRodSubLevelId() != null) {
                     graphics.drawString(this.font,
                             "  §a└ " + Component.translatable(
                                     "screen.iac_p.structure_info.conn_rod",
-                                    turret.lightningRodSubLevelId().toString().substring(0, 8) + "…")
+                                    machineGun.lightningRodSubLevelId().toString().substring(0, 8) + "…")
                                     .getString(),
                             LABEL_X + 8, currentY, 0x55FF55);
                     currentY += LINE_HEIGHT;

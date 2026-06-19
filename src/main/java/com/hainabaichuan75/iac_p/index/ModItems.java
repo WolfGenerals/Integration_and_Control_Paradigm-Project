@@ -26,8 +26,8 @@ public class ModItems {
     // === 霰弹枪底座方块 ===
     public static final DeferredItem<BlockItem> SHOTGUN_BASE = ITEMS.registerSimpleBlockItem(ModBlocks.SHOTGUN_BASE);
 
-    // === 炮塔底座方块 ===
-    public static final DeferredItem<BlockItem> TURRET_BASE = ITEMS.registerSimpleBlockItem(ModBlocks.TURRET_BASE);
+    // === 机枪底座方块 ===
+    public static final DeferredItem<BlockItem> MACHINE_GUN_BASE = ITEMS.registerSimpleBlockItem(ModBlocks.MACHINE_GUN_BASE);
 
     // === 悬挂测试方块 ===
     public static final DeferredItem<BlockItem> SUSPENSION_TEST = ITEMS.registerSimpleBlockItem(ModBlocks.SUSPENSION_TEST);

@@ -8,8 +8,9 @@ import com.hainabaichuan75.iac_p.network.packets.MountedStateS2CPacket;
 import com.hainabaichuan75.iac_p.network.packets.PlayerInputC2SPacket;
 import com.hainabaichuan75.iac_p.network.packets.SeatMountC2SPacket;
 import com.hainabaichuan75.iac_p.network.packets.TireConfigC2SPacket;
-import com.hainabaichuan75.iac_p.network.packets.TurretTargetC2SPacket;
+import com.hainabaichuan75.iac_p.network.packets.MachineGunTargetC2SPacket;
 import com.hainabaichuan75.iac_p.network.packets.WeaponFireC2SPacket;
+import com.hainabaichuan75.iac_p.network.packets.WeaponSoundS2CPacket;
 import com.hainabaichuan75.iac_p.network.packets.AnchorConfigC2SPacket;
 import com.hainabaichuan75.iac_p.network.packets.AnchorDataS2CPacket;
 import com.hainabaichuan75.iac_p.network.packets.GrindstoneConfigC2SPacket;
@@ -84,9 +85,9 @@ public class ModNetworking {
                 AnchorDataS2CPacket::handle
         );
         registrar.playToServer(
-                TurretTargetC2SPacket.TYPE,
-                TurretTargetC2SPacket.STREAM_CODEC,
-                TurretTargetC2SPacket::handle
+                MachineGunTargetC2SPacket.TYPE,
+                MachineGunTargetC2SPacket.STREAM_CODEC,
+                MachineGunTargetC2SPacket::handle
         );
         registrar.playToServer(
                 DebugGearToggleC2SPacket.TYPE,
@@ -102,6 +103,11 @@ public class ModNetworking {
                 WeaponFireC2SPacket.TYPE,
                 WeaponFireC2SPacket.STREAM_CODEC,
                 WeaponFireC2SPacket::handle
+        );
+        registrar.playToClient(
+                WeaponSoundS2CPacket.TYPE,
+                WeaponSoundS2CPacket.STREAM_CODEC,
+                WeaponSoundS2CPacket::handle
         );
         registrar.playToServer(
                 SmartMapC2SPacket.TYPE,

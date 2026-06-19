@@ -54,10 +54,10 @@ public class Config {
                 .define("experimentalDirectDismount", false);
         BUILDER.pop().pop();
 
-        // ====== Turret constraint anchor offsets ======
+        // ====== Machine gun constraint anchor offsets ======
         // Four groups: (block center getCenterBlock()+0.5) + offset
         // Each group has three doubles: offsetX, offsetY, offsetZ (blocks)
-        BUILDER.push("turret").push("constraint_anchors");
+        BUILDER.push("machine_gun").push("constraint_anchors");
 
         // ── Rod (barrel) anchor offset ──
         // Used as pos1 for rod↔grindstone GenericConstraint
@@ -142,33 +142,33 @@ public class Config {
     public static final ModConfigSpec.DoubleValue VEHICLE_CARPET_OFFSET_Y;
     public static final ModConfigSpec.DoubleValue VEHICLE_CARPET_OFFSET_Z;
 
-    // ====== 炮塔瞄准校准 ======
-    public static final ModConfigSpec.DoubleValue TURRET_YAW_OFFSET;
+    // ====== 机枪瞄准校准 ======
+    public static final ModConfigSpec.DoubleValue MACHINE_GUN_YAW_OFFSET;
 
     /**
-     * 方向机最大转速（度/秒），代码自动 ÷20 换算为每游戏刻限速
+     * 机枪方向机最大转速（度/秒），代码自动 ÷20 换算为每游戏刻限速
      */
-    public static final ModConfigSpec.DoubleValue TURRET_YAW_SPEED_DPS;
+    public static final ModConfigSpec.DoubleValue MACHINE_GUN_YAW_SPEED_DPS;
 
     /**
-     * 高低机最大转速（度/秒），俯仰比偏航慢，默认 40°/s
+     * 机枪高低机最大转速（度/秒），俯仰比偏航慢，默认 40°/s
      */
-    public static final ModConfigSpec.DoubleValue TURRET_PITCH_SPEED_DPS;
+    public static final ModConfigSpec.DoubleValue MACHINE_GUN_PITCH_SPEED_DPS;
 
     static {
-        BUILDER.push("turret").push("aim");
-        TURRET_YAW_OFFSET = BUILDER
-                .comment("炮塔方向机偏航角度校准偏移（单位：度）。",
-                        "如果炮塔瞄准位置与实际位置有固定角度偏差，",
-                        "通过此值校准。正值使炮塔顺时针偏转，负值逆时针。",
+        BUILDER.push("machine_gun").push("aim");
+        MACHINE_GUN_YAW_OFFSET = BUILDER
+                .comment("机枪方向机偏航角度校准偏移（单位：度）。",
+                        "如果机枪瞄准位置与实际位置有固定角度偏差，",
+                        "通过此值校准。正值使机枪顺时针偏转，负值逆时针。",
                         "建议在游戏中微调：先瞄准一个目标，测量偏差角度，填入此值。")
                 .defineInRange("yawOffset", 0.0, -180.0, 180.0);
-        TURRET_YAW_SPEED_DPS = BUILDER
+        MACHINE_GUN_YAW_SPEED_DPS = BUILDER
                 .comment("方向机最大转速（度/秒）。",
-                        "默认 90 = 每秒转 90°。调大 = 炮塔转更快。",
+                        "默认 90 = 每秒转 90°。调大 = 转更快。",
                         "换算关系：每游戏刻限速 = 该值 ÷ 20")
                 .defineInRange("yawSpeedDPS", 90.0, 1.0, 3600.0);
-        TURRET_PITCH_SPEED_DPS = BUILDER
+        MACHINE_GUN_PITCH_SPEED_DPS = BUILDER
                 .comment("高低机最大转速（度/秒）。",
                         "默认 40 = 每秒俯仰 40°。一般比方向机慢。",
                         "换算关系：每游戏刻限速 = 该值 ÷ 20")

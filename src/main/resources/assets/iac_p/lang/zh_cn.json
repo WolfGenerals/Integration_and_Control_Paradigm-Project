@@ -7,7 +7,7 @@
   "block.iac_p.cockpit_light_linear_2": "轻型线性座舱（上层）",
   "block.iac_p.cockpit_light_linear_3": "轻型线性座舱（上层延伸）",
   "block.iac_p.shotgun_base": "霰弹枪底座",
-  "block.iac_p.turret_base": "炮塔底座",
+  "block.iac_p.machine_gun_base": "机枪底座",
   "block.iac_p.suspension_test": "悬挂测试方块",
   "block.iac_p.debug_gear": "调试齿轮",
   "block.iac_p.debug_swivel_bearing": "调试 SwivelBearing",
@@ -130,6 +130,7 @@
   "iac_p.configuration.section.iac.p.common.toml.title": "中控载具工坊：范式 通用配置",
 
   "subtitles.iac_p.shotgun_fire": "霰弹枪开火",
+  "subtitles.iac_p.machine_gun_fire": "机枪开火",
 
   "debug.iac_p.overlay.mass": "重量",
   "debug.iac_p.overlay.engine": "发动机",

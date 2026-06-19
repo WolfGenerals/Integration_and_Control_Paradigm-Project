@@ -1,7 +1,7 @@
 package com.hainabaichuan75.iac_p.network.packets;
 
 import com.hainabaichuan75.iac_p.IACP;
-import com.hainabaichuan75.iac_p.content.blocks.turret.TurretBaseBlockEntity;
+import com.hainabaichuan75.iac_p.content.blocks.machine_gun.MachineGunBaseBlockEntity;
 import io.netty.buffer.ByteBuf;
 import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
@@ -58,11 +58,11 @@ public record AnchorDataS2CPacket(
             UUID uuid = packet.subLevelUUID;
 
             // 存入锚点缓存
-            TurretBaseBlockEntity.getAnchorMap().put(uuid,
+            MachineGunBaseBlockEntity.getAnchorMap().put(uuid,
                     new double[]{packet.anchorX, packet.anchorY, packet.anchorZ});
 
             // 存入线条缓存
-            TurretBaseBlockEntity.getLineCache().put(uuid, packet.lineData);
+            MachineGunBaseBlockEntity.getLineCache().put(uuid, packet.lineData);
 
             IACP.LOGGER.info("[AnchorDataS2CPacket] 收到锚点数据: UUID={} anchor=({}, {}, {})",
                     uuid, packet.anchorX, packet.anchorY, packet.anchorZ);

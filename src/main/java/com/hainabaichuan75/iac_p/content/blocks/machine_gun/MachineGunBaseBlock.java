@@ -1,4 +1,4 @@
-package com.hainabaichuan75.iac_p.content.blocks.turret;
+package com.hainabaichuan75.iac_p.content.blocks.machine_gun;
 
 import com.hainabaichuan75.iac_p.IACP;
 import com.hainabaichuan75.iac_p.index.ModBlockEntityTypes;
@@ -29,26 +29,26 @@ import net.minecraft.world.phys.shapes.VoxelShape;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * TurretBaseBlock —— 炮塔底座方块（地毯状，Create 动力学方块）。
+ * MachineGunBaseBlock —— 机枪底座方块（地毯状，Create 动力学方块）。
  * <p>
  * 放置时自动召唤砂轮 SubLevel（水平旋转/方向机）和避雷针 SubLevel（俯仰/高低机）。
  * 右键（空手）可切换拆卸/重新装配。形状类似地毯（1/16 格高），玩家可以站在上面。
  * <p>
- * 同时也是 Create 动力学方块 + 齿轮（ICogWheel）， 四个侧面可以接入齿轮驱动，RPM 通过约束电机驱动炮塔旋转。
+ * 同时也是 Create 动力学方块 + 齿轮（ICogWheel）， 四个侧面可以接入齿轮驱动，RPM 通过约束电机驱动机枪旋转。
  */
-public class TurretBaseBlock extends KineticBlock implements IBE<TurretBaseBlockEntity>, ICogWheel {
+public class MachineGunBaseBlock extends KineticBlock implements IBE<MachineGunBaseBlockEntity>, ICogWheel {
 
     /**
      * 地毯形状：1/16 格高
      */
     private static final VoxelShape SHAPE = Shapes.box(0.0, 0.0, 0.0, 1.0, 1.0 / 16.0, 1.0);
 
-    public TurretBaseBlock(Properties properties) {
+    public MachineGunBaseBlock(Properties properties) {
         super(properties);
     }
 
     /**
-     * 放置时自动召唤炮塔（砂轮 + 避雷针 SubLevel）。 玩家放置底座后立即装配，无需额外右键操作。
+     * 放置时自动召唤机枪（砂轮 + 避雷针 SubLevel）。 玩家放置底座后立即装配，无需额外右键操作。
      */
     @Override
     public void setPlacedBy(Level level, BlockPos pos, BlockState state, @Nullable LivingEntity placer, ItemStack stack) {
@@ -58,7 +58,7 @@ public class TurretBaseBlock extends KineticBlock implements IBE<TurretBaseBlock
         }
         this.withBlockEntityDo(level, pos, be -> {
             if (!be.isAssembled()) {
-                IACP.LOGGER.info("[TurretBaseBlock] setPlacedBy: 自动装配 @ {}", pos);
+                IACP.LOGGER.info("[MachineGunBaseBlock] setPlacedBy: 自动装配 @ {}", pos);
                 be.assemble();
             }
         });
@@ -66,7 +66,7 @@ public class TurretBaseBlock extends KineticBlock implements IBE<TurretBaseBlock
 
     @Override
     public Direction.Axis getRotationAxis(BlockState state) {
-        // 炮塔绕 Y 轴旋转（方向机）
+        // 机枪绕 Y 轴旋转（方向机）
         return Direction.Axis.Y;
     }
 
@@ -104,13 +104,13 @@ public class TurretBaseBlock extends KineticBlock implements IBE<TurretBaseBlock
             return InteractionResult.FAIL;
         }
         // 空手右键触发装配/拆卸（1.21.1 空手交互走此方法）
-        IACP.LOGGER.info("[TurretBaseBlock] useWithoutItem @ {} client={} player={}",
+        IACP.LOGGER.info("[MachineGunBaseBlock] useWithoutItem @ {} client={} player={}",
                 pos, level.isClientSide, player.getName().getString());
         if (level.isClientSide) {
             return InteractionResult.SUCCESS;
         }
         this.withBlockEntityDo(level, pos, be -> {
-            IACP.LOGGER.info("[TurretBaseBlock] 回调 BE：assembled={}", be.isAssembled());
+            IACP.LOGGER.info("[MachineGunBaseBlock] 回调 BE：assembled={}", be.isAssembled());
             if (be.isAssembled()) {
                 be.disassemble();
             } else {
@@ -123,25 +123,25 @@ public class TurretBaseBlock extends KineticBlock implements IBE<TurretBaseBlock
     @Override
     public void onRemove(BlockState state, Level level, BlockPos pos, BlockState newState, boolean movedByPiston) {
         if (!level.isClientSide && state.hasBlockEntity() && state.getBlock() != newState.getBlock()) {
-            IACP.LOGGER.info("[TurretBaseBlock] onRemove @ {} newState={}", pos, newState);
+            IACP.LOGGER.info("[MachineGunBaseBlock] onRemove @ {} newState={}", pos, newState);
             BlockEntity be = level.getBlockEntity(pos);
-            if (be instanceof TurretBaseBlockEntity turretBE) {
-                IACP.LOGGER.info("[TurretBaseBlock] onRemove: 调用 disassemble, assembled={}", turretBE.isAssembled());
+            if (be instanceof MachineGunBaseBlockEntity turretBE) {
+                IACP.LOGGER.info("[MachineGunBaseBlock] onRemove: 调用 disassemble, assembled={}", turretBE.isAssembled());
                 turretBE.disassemble();
             } else {
-                IACP.LOGGER.warn("[TurretBaseBlock] onRemove: BE 为空或类型不匹配: {}", be);
+                IACP.LOGGER.warn("[MachineGunBaseBlock] onRemove: BE 为空或类型不匹配: {}", be);
             }
         }
         super.onRemove(state, level, pos, newState, movedByPiston);
     }
 
     @Override
-    public Class<TurretBaseBlockEntity> getBlockEntityClass() {
-        return TurretBaseBlockEntity.class;
+    public Class<MachineGunBaseBlockEntity> getBlockEntityClass() {
+        return MachineGunBaseBlockEntity.class;
     }
 
     @Override
-    public BlockEntityType<? extends TurretBaseBlockEntity> getBlockEntityType() {
-        return ModBlockEntityTypes.TURRET_BASE.get();
+    public BlockEntityType<? extends MachineGunBaseBlockEntity> getBlockEntityType() {
+        return ModBlockEntityTypes.MACHINE_GUN_BASE.get();
     }
 }

@@ -2,7 +2,7 @@ package com.hainabaichuan75.iac_p.network.packets;
 
 import com.hainabaichuan75.iac_p.IACP;
 import com.hainabaichuan75.iac_p.content.blocks.shotgun.ShotgunBaseBlockEntity;
-import com.hainabaichuan75.iac_p.content.blocks.turret.TurretBaseBlockEntity;
+import com.hainabaichuan75.iac_p.content.blocks.machine_gun.MachineGunBaseBlockEntity;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.ByteBufCodecs;
@@ -19,7 +19,7 @@ import java.util.UUID;
  * AnchorConfigC2SPacket —— 客户端→服务端：更新砂轮锚点坐标。
  * <p>
  * 玩家在 GrindstoneConfigScreen 中修改 X/Y/Z 后保存时发送。
- * 服务端找到拥有该 SubLevel 的 TurretBaseBlockEntity，更新锚点。
+ * 服务端找到拥有该 SubLevel 的 MachineGunBaseBlockEntity，更新锚点。
  */
 public record AnchorConfigC2SPacket(UUID subLevelUUID, double x, double y, double z) implements CustomPacketPayload {
 
@@ -48,13 +48,13 @@ public record AnchorConfigC2SPacket(UUID subLevelUUID, double x, double y, doubl
                 UUID uuid = packet.subLevelUUID;
 
                 // 查砂轮注册表找到底座（炮塔）
-                BlockPos ownerPos = TurretBaseBlockEntity.findOwnerByGrindstoneUUID(uuid);
+                BlockPos ownerPos = MachineGunBaseBlockEntity.findOwnerByGrindstoneUUID(uuid);
                 if (ownerPos == null) {
-                    ownerPos = TurretBaseBlockEntity.findOwnerByRodUUID(uuid);
+                    ownerPos = MachineGunBaseBlockEntity.findOwnerByRodUUID(uuid);
                 }
                 if (ownerPos != null) {
                     BlockEntity be = level.getBlockEntity(ownerPos);
-                    if (be instanceof TurretBaseBlockEntity turret) {
+                    if (be instanceof MachineGunBaseBlockEntity turret) {
                         turret.setAnchor(packet.x, packet.y, packet.z);
                         IACP.LOGGER.info("[AnchorConfig] 炮塔锚点A -> ({}, {}, {}) (底座 @ {})",
                                 packet.x, packet.y, packet.z, ownerPos);
