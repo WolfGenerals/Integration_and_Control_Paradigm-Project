@@ -10,14 +10,10 @@ import com.hainabaichuan75.iac_p.affiliation.AffiliationTag;
 import com.hainabaichuan75.iac_p.index.ModBlockEntityTypes;
 import com.simibubi.create.content.kinetics.base.KineticBlockEntity;
 import com.simibubi.create.foundation.blockEntity.behaviour.BlockEntityBehaviour;
+import dev.ryanhcode.sable.api.physics.constraint.*;
 import net.createmod.catnip.math.AngleHelper;
 import dev.ryanhcode.sable.Sable;
 import dev.ryanhcode.sable.api.physics.PhysicsPipeline;
-import dev.ryanhcode.sable.api.physics.constraint.ConstraintJointAxis;
-import dev.ryanhcode.sable.api.physics.constraint.PhysicsConstraintHandle;
-import dev.ryanhcode.sable.api.physics.constraint.free.FreeConstraintConfiguration;
-import dev.ryanhcode.sable.api.physics.constraint.generic.GenericConstraintConfiguration;
-import dev.ryanhcode.sable.api.physics.constraint.rotary.RotaryConstraintConfiguration;
 import dev.ryanhcode.sable.api.sublevel.ServerSubLevelContainer;
 import dev.ryanhcode.sable.api.sublevel.SubLevelContainer;
 import dev.ryanhcode.sable.companion.math.Pose3d;
@@ -413,7 +409,7 @@ public class ShotgunBaseBlockEntity extends KineticBlockEntity implements com.ha
                         (float) lastTargetAngleDegrees, (float) targetAngleDegrees));
 
         swivelBearingHandle.setMotor(
-                dev.ryanhcode.sable.api.physics.constraint.rotary.RotaryConstraintHandle.DEFAULT_AXIS,
+                RotaryConstraintHandle.DEFAULT_AXIS,
                 goal,
                 SERVO_STIFFNESS,
                 SERVO_DAMPING,
