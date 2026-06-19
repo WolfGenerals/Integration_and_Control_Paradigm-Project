@@ -1,7 +1,7 @@
 package com.hainabaichuan75.iac_p.client.renderer;
 
 import com.hainabaichuan75.iac_p.IACP;
-import com.hainabaichuan75.iac_p.content.blocks.turret.TurretBaseBlockEntity;
+import com.hainabaichuan75.iac_p.content.blocks.machine_gun.MachineGunBaseBlockEntity;
 import com.mojang.blaze3d.vertex.PoseStack;
 import net.minecraft.core.BlockPos;
 import com.mojang.blaze3d.vertex.VertexConsumer;
@@ -123,7 +123,7 @@ public class AxisLineRenderer {
                     //  绘制一个 3×3×3 的三色三维十字线（红X 绿Y 蓝Z），两端各延伸 3 格
                     //  效果：在主世界精准定位物理结构上特定方块的位置
                     // ============================================================
-                    java.util.List<BlockPos> carpetPositions = TurretBaseBlockEntity.getCarpetLocalPosMap().get(sl.getUniqueId());
+                    java.util.List<BlockPos> carpetPositions = MachineGunBaseBlockEntity.getCarpetLocalPosMap().get(sl.getUniqueId());
                     if (carpetPositions != null && !carpetPositions.isEmpty()) {
                         for (BlockPos carpetLocalPos : carpetPositions) {
                             // 地毯中心在 SubLevel 局部坐标

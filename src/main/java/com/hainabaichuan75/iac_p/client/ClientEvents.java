@@ -16,7 +16,7 @@ import com.hainabaichuan75.iac_p.network.packets.DebugGearToggleC2SPacket;
 import com.hainabaichuan75.iac_p.network.packets.DebugSwivelToggleC2SPacket;
 import com.hainabaichuan75.iac_p.network.packets.GearShiftC2SPacket;
 import com.hainabaichuan75.iac_p.network.packets.SeatMountC2SPacket;
-import com.hainabaichuan75.iac_p.network.packets.TurretTargetC2SPacket;
+import com.hainabaichuan75.iac_p.network.packets.MachineGunTargetC2SPacket;
 import com.hainabaichuan75.iac_p.network.packets.VehicleControlC2SPacket;
 import com.mojang.blaze3d.platform.InputConstants;
 import net.minecraft.client.gui.screens.inventory.InventoryScreen;
@@ -503,7 +503,7 @@ public class ClientEvents {
                         Vec3 hitPos = WeaponOverlay.performRaycast();
                         if (hitPos != null) {
                             ModNetworking.sendToServer(
-                                    new TurretTargetC2SPacket(
+                                    new MachineGunTargetC2SPacket(
                                             (float) hitPos.x,
                                             (float) hitPos.y,
                                             (float) hitPos.z));

@@ -5,6 +5,7 @@ import com.hainabaichuan75.iac_p.affiliation.AffiliationRegistry;
 import com.hainabaichuan75.iac_p.events.PartDamageCache;
 import com.hainabaichuan75.iac_p.events.PlayerMountTracker;
 import com.hainabaichuan75.iac_p.index.ModSounds;
+import com.hainabaichuan75.iac_p.network.packets.WeaponSoundS2CPacket;
 import dev.ryanhcode.sable.api.sublevel.SubLevelContainer;
 import dev.ryanhcode.sable.sublevel.SubLevel;
 import net.minecraft.network.RegistryFriendlyByteBuf;
@@ -17,6 +18,7 @@ import net.minecraft.world.entity.projectile.ProjectileUtil;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.EntityHitResult;
 import net.minecraft.world.phys.Vec3;
+import net.neoforged.neoforge.network.PacketDistributor;
 import net.neoforged.neoforge.network.handling.IPayloadContext;
 
 import java.util.UUID;
@@ -42,7 +44,7 @@ public class WeaponFireC2SPacket implements CustomPacketPayload {
     public static final Type<WeaponFireC2SPacket> TYPE = new Type<>(ID);
 
     // 武器类型常量
-    public static final byte WEAPON_TURRET = 1;
+    public static final byte WEAPON_MACHINE_GUN = 1;
     public static final byte WEAPON_SHOTGUN = 2;
 
     /**
@@ -95,7 +97,7 @@ public class WeaponFireC2SPacket implements CustomPacketPayload {
             double velX, double velY, double velZ) {
         this(originX, originY, originZ, hitX, hitY, hitZ,
                 false, 0L, 0L, 0.0, 0.0, 0.0,
-                velX, velY, velZ, WEAPON_TURRET);
+                velX, velY, velZ, WEAPON_MACHINE_GUN);
     }
 
     /**
@@ -275,22 +277,25 @@ public class WeaponFireC2SPacket implements CustomPacketPayload {
             Vec3 dir = hitPos.subtract(origin);
             double dist = dir.length();
 
-            // 服务端广播开火音效（每个玩家每 tick 最多一次，在 muzzle 位置播放）
+            // ── 服务端音效：只发给「其他玩家」，开火者已由客户端本地音效覆盖 ──
+            //  开火者客户端已在 WeaponOverlay.fireFromRegistry() 中立即播放 playLocalSound，
+            //  无需等待服务端广播。此处通过 WeaponSoundS2CPacket 仅发给附近的其他玩家。
+            //  使用距离判断（64 格，覆盖 sounds.json 的 attenuation_distance=48）避免发给过远玩家。
             int currentTick = (int) level.getGameTime();
             Integer lastTick = LAST_SOUND_TICK.get(player.getUUID());
             if (lastTick == null || currentTick != lastTick) {
                 LAST_SOUND_TICK.put(player.getUUID(), currentTick);
-                net.minecraft.sounds.SoundEvent soundEvent = (packet.weaponType == WEAPON_SHOTGUN)
-                        ? ModSounds.SHOTGUN_FIRE.get()
-                        : ModSounds.TURRET_FIRE.get();
-                // playback volume=1.0，完全依赖 sounds.json 的 base volume 和 attenuation_distance
-                // 避免 volume>1.0 导致的 OpenAL 音量钳位（恒定音量区间）
-                level.playSound(null,
+                WeaponSoundS2CPacket soundPacket = new WeaponSoundS2CPacket(
                         packet.originX, packet.originY, packet.originZ,
-                        soundEvent,
-                        net.minecraft.sounds.SoundSource.PLAYERS,
-                        1.0f,
-                        1.0f);
+                        packet.weaponType, 1.0f, 1.0f);
+                for (ServerPlayer otherPlayer : level.getServer().getPlayerList().getPlayers()) {
+                    if (otherPlayer == player || otherPlayer.serverLevel() != level) continue;
+                    double dx = otherPlayer.getX() - packet.originX;
+                    double dz = otherPlayer.getZ() - packet.originZ;
+                    if (dx * dx + dz * dz < 64.0 * 64.0) {
+                        PacketDistributor.sendToPlayer(otherPlayer, soundPacket);
+                    }
+                }
             }
 
             // ---- 方块伤害 ----

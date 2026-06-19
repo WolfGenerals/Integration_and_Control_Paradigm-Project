@@ -374,7 +374,7 @@ public class PlayerMountTracker {
      */
     @SubscribeEvent
     public static void onServerTick(ServerTickEvent.Post event) {
-        // 炮塔瞄准已移至 TurretTargetC2SPacket.handle() 直接驱动，不再依赖 tick
+        // 机枪瞄准已移至 MachineGunTargetC2SPacket.handle() 直接驱动，不再依赖 tick
 
         if (MOUNTED.isEmpty()) {
             return;

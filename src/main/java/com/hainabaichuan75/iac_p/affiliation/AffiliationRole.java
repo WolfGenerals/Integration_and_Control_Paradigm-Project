@@ -14,17 +14,17 @@ public enum AffiliationRole {
      */
     VEHICLE_BODY,
     /**
-     * 炮塔底座（地毯形方块）
+     * 机枪底座（地毯形方块）
      */
-    TURRET_BASE,
+    MACHINE_GUN_BASE,
     /**
-     * 方向机：砂轮 SubLevel，负责水平旋转
+     * 机枪方向机：砂轮 SubLevel，负责水平旋转
      */
-    TURRET_YAW,
+    MACHINE_GUN_YAW,
     /**
-     * 高低机：避雷针 SubLevel，负责俯仰
+     * 机枪高低机：避雷针 SubLevel，负责俯仰
      */
-    TURRET_PITCH,
+    MACHINE_GUN_PITCH,
     /**
      * 霰弹枪底座（地毯形方块）
      */

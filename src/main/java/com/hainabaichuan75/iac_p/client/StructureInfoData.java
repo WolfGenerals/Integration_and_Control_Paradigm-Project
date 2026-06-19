@@ -5,7 +5,7 @@ import com.hainabaichuan75.iac_p.affiliation.ComponentRole;
 import com.hainabaichuan75.iac_p.content.blocks.cockpit.CockpitBlock;
 import com.hainabaichuan75.iac_p.content.blocks.cockpit_light.CockpitLightLinear0Block;
 import com.hainabaichuan75.iac_p.content.blocks.shotgun.ShotgunBaseBlockEntity;
-import com.hainabaichuan75.iac_p.content.blocks.turret.TurretBaseBlockEntity;
+import com.hainabaichuan75.iac_p.content.blocks.machine_gun.MachineGunBaseBlockEntity;
 import com.hainabaichuan75.iac_p.events.SubLevelScanner;
 import dev.ryanhcode.sable.sublevel.SubLevel;
 import net.minecraft.core.BlockPos;
@@ -37,7 +37,7 @@ public record StructureInfoData(
 
         // ====== 武器系统 ======
         /** 炮塔底座信息列表 */
-        List<TurretInfo> turrets,
+        List<MachineGunInfo> machineGuns,
 
         // ====== 驾驶舱信息 ======
         /** 是否找到驾驶舱 */
@@ -52,7 +52,7 @@ public record StructureInfoData(
     /**
      * 炮塔底座信息
      */
-    public record TurretInfo(
+    public record MachineGunInfo(
             BlockPos position,
             boolean isAssembled,
             UUID grindstoneSubLevelId,
@@ -66,8 +66,8 @@ public record StructureInfoData(
      * <p>
      * <ol>
      *   <li>全量遍历 SubLevel 内所有已加载方块，按 Block 注册名统计数量</li>
-     *   <li>通过 {@link ComponentRegistry} 查询 TURRET_BASE 部件</li>
-     *   <li>为每个炮塔底座提取连接信息</li>
+     *   <li>通过 {@link ComponentRegistry} 查询 MACHINE_GUN_BASE 部件</li>
+     *   <li>为每个机枪底座提取连接信息</li>
      * </ol>
      *
      * @param subLevel 目标 SubLevel（驾驶舱所在物理结构）
@@ -107,16 +107,16 @@ public record StructureInfoData(
                 .toList();
 
         // ====== 2. 武器系统扫描（通过 ComponentRegistry） ======
-        List<TurretInfo> turretInfos = new ArrayList<>();
+        List<MachineGunInfo> machineGunInfos = new ArrayList<>();
 
         // 炮塔
-        var turretEntries = ComponentRegistry.getComponents(subUUID, ComponentRole.TURRET_BASE);
-        for (var entry : turretEntries) {
+        var machineGunEntries = ComponentRegistry.getComponents(subUUID, ComponentRole.MACHINE_GUN_BASE);
+        for (var entry : machineGunEntries) {
             BlockEntity be = entry.blockEntity();
-            if (be instanceof TurretBaseBlockEntity turret) {
-                addTurretInfo(turretInfos, entry.blockPos(), turret.isAssembled(),
-                        turret.getGrindstoneSubLevelId(), turret.getLightningRodSubLevelId(),
-                        turret.getVehicleSubLevelId());
+            if (be instanceof MachineGunBaseBlockEntity machineGun) {
+                addMachineGunInfo(machineGunInfos, entry.blockPos(), machineGun.isAssembled(),
+                        machineGun.getGrindstoneSubLevelId(), machineGun.getLightningRodSubLevelId(),
+                        machineGun.getVehicleSubLevelId());
             }
         }
 
@@ -125,7 +125,7 @@ public record StructureInfoData(
         for (var entry : shotgunEntries) {
             BlockEntity be = entry.blockEntity();
             if (be instanceof ShotgunBaseBlockEntity shotgun) {
-                addTurretInfo(turretInfos, entry.blockPos(), shotgun.isAssembled(),
+                addMachineGunInfo(machineGunInfos, entry.blockPos(), shotgun.isAssembled(),
                         shotgun.getGrindstoneSubLevelId(), shotgun.getLightningRodSubLevelId(),
                         shotgun.getVehicleSubLevelId());
             }
@@ -135,15 +135,15 @@ public record StructureInfoData(
                 sortedCounts,
                 typeCountMap.size(),
                 nonAirTotal[0],
-                turretInfos,
+                machineGunInfos,
                 foundCockpit[0]
         );
     }
 
     /**
-     * 添加单条武器底座信息到列表（炮塔/霰弹枪共用）。
+     * 添加单条武器底座信息到列表（机枪/霰弹枪共用）。
      */
-    private static void addTurretInfo(List<TurretInfo> list, BlockPos pos, boolean assembled,
+    private static void addMachineGunInfo(List<MachineGunInfo> list, BlockPos pos, boolean assembled,
             UUID gsId, UUID rodId, UUID vehId) {
         StringBuilder status = new StringBuilder();
         if (!assembled) {
@@ -159,6 +159,6 @@ public record StructureInfoData(
                 status.append(String.join(" ", parts));
             }
         }
-        list.add(new TurretInfo(pos, assembled, gsId, rodId, vehId, status.toString()));
+        list.add(new MachineGunInfo(pos, assembled, gsId, rodId, vehId, status.toString()));
     }
 }

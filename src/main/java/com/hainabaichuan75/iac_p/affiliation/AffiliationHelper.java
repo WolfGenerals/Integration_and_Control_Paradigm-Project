@@ -62,24 +62,24 @@ public final class AffiliationHelper {
     }
 
     /**
-     * 注册一个炮塔部件（底座/砂轮/避雷针），自动分配 role 和 groupId。
+     * 注册一个机枪部件（底座/砂轮/避雷针），自动分配 role 和 groupId。
      * <p>
-     * 由 {@code TurretBaseBlockEntity.assemble()} 在创建 SubLevel 后调用。
+     * 由 {@code MachineGunBaseBlockEntity.assemble()} 在创建 SubLevel 后调用。
      *
      * @param subLevelUUID 部件 SubLevel UUID
      * @param vehicleUUID 所属载具 SubLevel UUID
-     * @param groupId 炮塔组 UUID（共享耐久池）
+     * @param groupId 机枪组 UUID（共享耐久池）
      * @param role 该部件的角色
      * @param faction 阵营
      */
-    public static void registerTurretPart(UUID subLevelUUID, UUID vehicleUUID,
+    public static void registerMachineGunPart(UUID subLevelUUID, UUID vehicleUUID,
             UUID groupId, AffiliationRole role, int faction) {
         if (subLevelUUID == null || vehicleUUID == null || groupId == null) {
             return;
         }
         AffiliationTag tag = AffiliationTag.turretPart(vehicleUUID, groupId, role, faction);
         AffiliationRegistry.register(subLevelUUID, tag);
-        IACP.LOGGER.debug("[AffiliationHelper] 炮塔部件注册: {} role={}, group={}, vehicle={}",
+        IACP.LOGGER.debug("[AffiliationHelper] 机枪部件注册: {} role={}, group={}, vehicle={}",
                 subLevelUUID.toString().substring(0, 8),
                 role, groupId.toString().substring(0, 8),
                 vehicleUUID.toString().substring(0, 8));

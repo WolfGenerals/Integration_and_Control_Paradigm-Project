@@ -12,7 +12,7 @@ import com.hainabaichuan75.iac_p.content.blocks.debug_swivel.DebugSwivelBearingB
 import com.hainabaichuan75.iac_p.content.blocks.seat.SeatBlock;
 import com.hainabaichuan75.iac_p.content.blocks.suspension_test.SuspensionTestBlock;
 import com.hainabaichuan75.iac_p.content.blocks.shotgun.ShotgunBaseBlock;
-import com.hainabaichuan75.iac_p.content.blocks.turret.TurretBaseBlock;
+import com.hainabaichuan75.iac_p.content.blocks.machine_gun.MachineGunBaseBlock;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.SoundType;
 import net.minecraft.world.level.block.state.BlockBehaviour;
@@ -106,9 +106,9 @@ public class ModBlocks {
                     .noOcclusion()
                     .isRedstoneConductor((s, l, p) -> false));
 
-    // === 炮塔底座方块 ===
-    public static final DeferredBlock<TurretBaseBlock> TURRET_BASE = BLOCKS.registerBlock("turret_base",
-            TurretBaseBlock::new,
+    // === 机枪底座方块 ===
+    public static final DeferredBlock<MachineGunBaseBlock> MACHINE_GUN_BASE = BLOCKS.registerBlock("machine_gun_base",
+            MachineGunBaseBlock::new,
             BlockBehaviour.Properties.of()
                     .strength(0.5f)
                     .sound(SoundType.WOOL)

@@ -27,17 +27,17 @@ public enum ComponentRole {
      */
     SUSPENSION,
     /**
-     * 炮塔底座：武器系统的安装基座
+     * 机枪底座：武器系统的安装基座
      */
-    TURRET_BASE,
+    MACHINE_GUN_BASE,
     /**
      * 方向机（砂轮 SubLevel 对应方块的占位标记）：负责炮塔水平旋转
      */
-    TURRET_YAW,
+    MACHINE_GUN_YAW,
     /**
      * 高低机（避雷针 SubLevel 对应方块的占位标记）：负责炮塔俯仰
      */
-    TURRET_PITCH,
+    MACHINE_GUN_PITCH,
     /**
      * 霰弹枪底座：霰弹枪的安装基座
      */
@@ -119,7 +119,7 @@ public enum ComponentRole {
      * 判断此角色是否为武器类别。
      */
     public boolean isWeapon() {
-        return this == TURRET_BASE || this == TURRET_YAW || this == TURRET_PITCH
+        return this == MACHINE_GUN_BASE || this == MACHINE_GUN_YAW || this == MACHINE_GUN_PITCH
                 || this == SHOTGUN_BASE || this == SHOTGUN_YAW || this == SHOTGUN_PITCH
                 || this == WEAPON_CANNON || this == WEAPON_MACHINEGUN
                 || this == WEAPON_MISSILE || this == WEAPON_LASER;

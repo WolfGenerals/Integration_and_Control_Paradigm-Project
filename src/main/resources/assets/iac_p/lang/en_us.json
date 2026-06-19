@@ -7,7 +7,7 @@
   "block.iac_p.cockpit_light_linear_2": "Light Cockpit Linear (Upper)",
   "block.iac_p.cockpit_light_linear_3": "Light Cockpit Linear (Upper Ext)",
   "block.iac_p.shotgun_base": "Shotgun Base",
-  "block.iac_p.turret_base": "Turret Base",
+  "block.iac_p.machine_gun_base": "Machine Gun Base",
   "block.iac_p.suspension_test": "Suspension Test Block",
   "block.iac_p.debug_gear": "Debug Gear",
   "block.iac_p.debug_swivel_bearing": "Debug SwivelBearing",
@@ -130,6 +130,7 @@
   "iac_p.configuration.section.iac.p.common.toml.title": "IAC-P Common Config",
 
   "subtitles.iac_p.shotgun_fire": "Shotgun fires",
+  "subtitles.iac_p.machine_gun_fire": "Machine gun fires",
 
   "debug.iac_p.overlay.mass": "Weight",
   "debug.iac_p.overlay.engine": "Engine",

@@ -3,7 +3,7 @@ package com.hainabaichuan75.iac_p.index;
 import com.hainabaichuan75.iac_p.IACP;
 import com.hainabaichuan75.iac_p.content.blocks.suspension_test.SuspensionTestBlockEntity;
 import com.hainabaichuan75.iac_p.content.blocks.shotgun.ShotgunBaseBlockEntity;
-import com.hainabaichuan75.iac_p.content.blocks.turret.TurretBaseBlockEntity;
+import com.hainabaichuan75.iac_p.content.blocks.machine_gun.MachineGunBaseBlockEntity;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.neoforged.neoforge.registries.DeferredRegister;
@@ -21,11 +21,11 @@ public class ModBlockEntityTypes {
                             ModBlocks.SUSPENSION_TEST.get()
                     ).build(null));
 
-    public static final Supplier<BlockEntityType<TurretBaseBlockEntity>> TURRET_BASE =
-            BLOCK_ENTITY_TYPES.register("turret_base",
+    public static final Supplier<BlockEntityType<MachineGunBaseBlockEntity>> MACHINE_GUN_BASE =
+            BLOCK_ENTITY_TYPES.register("machine_gun_base",
                     () -> BlockEntityType.Builder.of(
-                            TurretBaseBlockEntity::new,
-                            ModBlocks.TURRET_BASE.get()
+                            MachineGunBaseBlockEntity::new,
+                            ModBlocks.MACHINE_GUN_BASE.get()
                     ).build(null));
 
     public static final Supplier<BlockEntityType<ShotgunBaseBlockEntity>> SHOTGUN_BASE =
