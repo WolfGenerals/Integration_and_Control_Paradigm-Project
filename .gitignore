@@ -5,6 +5,7 @@ out
 *.iml
 .idea
 !.idea/scopes
+.ai
 
 # gradle
 build
@@ -13,7 +14,10 @@ build
 # other
 run
 runs
+
 .cache
+**/*.log
+**/*.tmp
 
 .vscode/
 .DS_Store
