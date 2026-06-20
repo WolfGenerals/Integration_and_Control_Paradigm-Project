@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__maven-indexer__search_classes",
+      "mcp__maven-indexer__get_class_details",
+      "mcp__maven-indexer__search_implementations"
+    ]
+  }
+}

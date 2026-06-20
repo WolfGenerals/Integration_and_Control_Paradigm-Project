@@ -1,60 +1,23 @@
-### Gradle ###
-.gradle
-build/
-!gradle/wrapper/gradle-wrapper.jar
-!**/src/**/build/
-
-### Build artifacts ###
-tmp_*/
-tmp_classes/
-tmp_decompile/
-gradle_build.log
-build_err.txt
-*.log
-
-### Decompiled third-party class files (never commit bytecode) ###
-/com/
-/dev/
-/libs/extracted/
-
-### Local dependency JARs (use remote Maven repos instead) ###
-/libs/
-!/libs/README.md
-
-### Development / Network tools ###
-NetworkTools/
-
-### IntelliJ IDEA ###
-.idea/
+# idea
+out
+*.ipr
 *.iws
 *.iml
-*.ipr
-out/
-!**/src/**/out/
+.idea
+!.idea/scopes
+.ai
 
-.run/
+# gradle
+build
+.gradle
 
-### Eclipse ###
-.apt_generated
-.classpath
-.eclipse/
-.factorypath
-.project
-.settings
-.springBeans
-.sts4-cache
-bin/
-!**/src/**/bin/
+# other
+run
+runs
 
-### VS Code ###
+.cache
+**/*.log
+**/*.tmp
+
 .vscode/
-
-### Mac OS ###
 .DS_Store
-
-### Minecraft Modding ###
-run/
-!**/src/**/run/
-**/src/generated/**/.cache/
-repo/
-!**/src/**/repo/
